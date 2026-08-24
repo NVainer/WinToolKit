@@ -39,6 +39,11 @@ html[data-theme="light"] {
 
 * { box-sizing: border-box; }
 
+/* The panels below set `display: flex`, which outranks the UA rule the
+   `hidden` attribute relies on. Without this they are painted even when the
+   markup says they are hidden. */
+[hidden] { display: none !important; }
+
 html, body {
   height: 100%;
   margin: 0;
