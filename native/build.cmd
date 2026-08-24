@@ -7,13 +7,19 @@ rem Windows 10/11 (the .NET Framework 4.x runtime is in-box there).
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
+rem Double-clicked from Explorer?  Then this window closes the moment the
+rem script ends, so hold it open at the end.  Launched from a terminal there
+rem is nothing to hold, and a pause would just be in the way.
+set "HOLD="
+echo %cmdcmdline% | find /i "%~f0" >nul 2>&1 && set "HOLD=1"
+
 set "CSC=%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 if not exist "%CSC%" set "CSC=%SystemRoot%\Microsoft.NET\Framework\v4.0.30319\csc.exe"
 if not exist "%CSC%" (
   echo Could not find the in-box C# compiler:
   echo   %SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\csc.exe
   echo This needs the .NET Framework 4.x runtime, which ships with Windows 10 and 11.
-  exit /b 1
+  goto :done_fail
 )
 
 set "OUTDIR=%~dp0bin"
@@ -26,7 +32,7 @@ set "WEB=%~dp0..\dcc\web"
 for %%F in ("%WEB%\index.html" "%WEB%\app.js" "%WEB%\style.css") do (
   if not exist "%%~F" (
     echo Missing web asset: %%~F
-    exit /b 1
+    goto :done_fail
   )
 )
 
@@ -39,17 +45,24 @@ echo Compiling...
   /resource:"%WEB%\style.css",style.css ^
   "%~dp0src\*.cs"
 
-if errorlevel 1 (
-  echo.
-  echo BUILD FAILED
-  exit /b 1
-)
+if errorlevel 1 goto :done_fail
 
 echo.
 for %%A in ("%OUT%") do echo Built %%~fA  (%%~zA bytes^)
 echo.
-echo Run it with:
-echo   "%OUT%"
+echo Start the console with:
+echo    run.cmd
+echo or double-click bin\DeviceControlConsole.exe
 echo.
-echo It is self-contained -- copy that single file anywhere.
-endlocal
+echo That single .exe is self-contained - copy it anywhere.
+goto :done_ok
+
+:done_fail
+echo.
+echo BUILD FAILED
+if defined HOLD pause
+exit /b 1
+
+:done_ok
+if defined HOLD pause
+exit /b 0

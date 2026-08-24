@@ -20,9 +20,26 @@ namespace DeviceControlConsole
         [STAThread]
         public static int Main(string[] args)
         {
-            try { return Run(args); }
-            catch (ActionException ex) { Console.Error.WriteLine("error: " + ex.Message); return 2; }
-            catch (PnpUtilException ex) { Console.Error.WriteLine("error: " + ex.Message); return 2; }
+            int code;
+            try { code = Run(args); }
+            catch (ActionException ex)
+            {
+                Console.Error.WriteLine("error: " + ex.Message);
+                code = 2;
+            }
+            catch (PnpUtilException ex)
+            {
+                Console.Error.WriteLine("error: " + ex.Message);
+                code = 2;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("unexpected error: " + ex.GetType().Name + ": " + ex.Message);
+                code = 3;
+            }
+            // Double-clicked windows close instantly; hold the failure on screen.
+            if (code != 0) ConsoleHost.PauseIfLaunchedFromExplorer("Exited with code " + code + ".");
+            return code;
         }
 
         private static int Run(string[] args)
@@ -43,6 +60,7 @@ namespace DeviceControlConsole
             switch (command)
             {
                 case "serve": return CmdServe(rest);
+                case "check": return CmdCheck(rest);
                 case "devices": return CmdDevices(rest);
                 case "drivers": return CmdDrivers(rest);
                 case "resolve": return CmdResolve(rest);
@@ -144,12 +162,30 @@ namespace DeviceControlConsole
             Console.WriteLine("  URL         : " + url);
             Console.WriteLine("  Elevated    : " + (Actions.IsElevated()
                 ? "yes" : "no (write actions will prompt for UAC)"));
-            Console.WriteLine("  Stop        : Ctrl+C");
+            Console.WriteLine("  Stop        : Ctrl+C, or just close this window");
+            Console.WriteLine();
+            Console.WriteLine("  Scanning devices...");
             Console.Out.Flush();
+
+            // Progress goes to this window so it is obvious the console is alive.
+            Api.Log = delegate (string message)
+            {
+                Console.WriteLine("  " + DateTime.Now.ToString("HH:mm:ss") + "  " + message);
+                Console.Out.Flush();
+            };
 
             ThreadPool.QueueUserWorkItem(delegate (object unused)
             {
-                try { Api.Cache.Get(true); } catch (Exception) { }
+                try
+                {
+                    Snapshot warm = Api.Cache.Get(true);
+                    Dictionary<string, object> meta = warm.Meta();
+                    Api.Log("Ready: " + meta["device_count"] + " devices, "
+                        + meta["driver_count"] + " driver packages ("
+                        + meta["orphan_driver_count"] + " orphaned).");
+                    Api.Log("Waiting for the browser. If it did not open, paste the URL above.");
+                }
+                catch (Exception ex) { Api.Log("Scan failed: " + ex.Message); }
             });
 
             if (openBrowser)
@@ -172,7 +208,19 @@ namespace DeviceControlConsole
             {
                 HttpServer server = new HttpServer(Host, port, Api.Route);
                 try { server.Bind(40, 400); }
-                catch (IOException ex) { Console.Error.WriteLine(ex.Message); return 1; }
+                catch (IOException ex)
+                {
+                    Console.Error.WriteLine();
+                    Console.Error.WriteLine("Could not listen on port " + port + ".");
+                    Console.Error.WriteLine(ex.Message);
+                    Console.Error.WriteLine();
+                    Console.Error.WriteLine("Another console is probably already running. Either use it,");
+                    Console.Error.WriteLine("or start this one on a free port:");
+                    Console.Error.WriteLine("    DeviceControlConsole.exe serve --port " + (port + 1));
+                    Console.Error.WriteLine("Check what is holding the port with:");
+                    Console.Error.WriteLine("    DeviceControlConsole.exe check --port " + port);
+                    return 1;
+                }
                 Api.Server = server;
                 server.Serve();
                 server.Stop();
@@ -193,6 +241,71 @@ namespace DeviceControlConsole
                 Console.WriteLine("  elevation did not complete; continuing as standard user.");
                 Console.Out.Flush();
             }
+        }
+
+        /// <summary>Answers "is a console already running, and where?"</summary>
+        private static int CmdCheck(List<string> args)
+        {
+            int port = IntOpt(args, "--port", 8777);
+            int[] ports = Opt(args, "--port", "").Length > 0
+                ? new int[] { port }
+                : new int[] { 8777, 8778, 8779 };
+
+            bool foundAny = false;
+            foreach (int p in ports)
+            {
+                if (!WaitForPort(p, 1)) continue;
+                foundAny = true;
+                Console.WriteLine("Port " + p + ": something is listening.");
+                int owner = OwningPid(p);
+                if (owner > 0)
+                {
+                    string name = "?";
+                    try { name = Process.GetProcessById(owner).ProcessName + ".exe"; }
+                    catch (ArgumentException) { }
+                    Console.WriteLine("    process  : " + name + "  (PID " + owner + ")");
+                }
+                Console.WriteLine("    open it  : http://" + Host + ":" + p + "/");
+                Console.WriteLine("    note     : the page needs the token printed by that console window.");
+            }
+            if (!foundAny)
+            {
+                Console.WriteLine("No console is running on port "
+                    + string.Join(", ", Array.ConvertAll(ports, delegate (int p)
+                        { return p.ToString(CultureInfo.InvariantCulture); })) + ".");
+                Console.WriteLine("Start one with:  DeviceControlConsole.exe");
+                return 1;
+            }
+            return 0;
+        }
+
+        private static int OwningPid(int port)
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo("netstat.exe", "-ano -p TCP");
+                psi.UseShellExecute = false;
+                psi.RedirectStandardOutput = true;
+                psi.CreateNoWindow = true;
+                using (Process p = Process.Start(psi))
+                {
+                    string output = p.StandardOutput.ReadToEnd();
+                    p.WaitForExit(10000);
+                    string needle = ":" + port;
+                    foreach (string line in output.Split('\n'))
+                    {
+                        if (line.IndexOf("LISTENING", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        string[] parts = line.Split(new char[] { ' ', '\t' },
+                            StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length < 5) continue;
+                        if (!parts[1].EndsWith(needle, StringComparison.Ordinal)) continue;
+                        int pid;
+                        if (int.TryParse(parts[parts.Length - 1], out pid)) return pid;
+                    }
+                }
+            }
+            catch (Exception) { }
+            return 0;
         }
 
         private static string NewToken()

@@ -22,6 +22,10 @@ namespace DeviceControlConsole
         public static bool ElevationDeclined;
         public static HttpServer Server;
 
+        /// <summary>Set by the host so progress shows in the console window.</summary>
+        public static Action<string> Log = delegate (string message) { };
+        private static int _pageLoads;
+
         private static readonly string[] AllowedHosts = { "127.0.0.1", "localhost", "[::1]" };
 
         // ------------------------------------------------------- routing
@@ -127,6 +131,8 @@ namespace DeviceControlConsole
         {
             byte[] raw = Resource("index.html");
             if (raw == null) return Response.Error("index.html is missing from the build", 500);
+            int loads = System.Threading.Interlocked.Increment(ref _pageLoads);
+            Log(loads == 1 ? "Browser connected. The console is running." : "Page reloaded (" + loads + ").");
             string html = Encoding.UTF8.GetString(raw).Replace("__DCC_TOKEN__", Token);
             return Response.Text(html, "text/html; charset=utf-8");
         }
