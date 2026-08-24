@@ -67,6 +67,7 @@ namespace DeviceControlConsole
             m["reboot_required"] = RebootRequired;
             m["elevated"] = Elevated;
             m["output"] = Output;
+            m["reason"] = ReturnCode == -1 ? "did not run" : PnpUtil.DescribeExitCode(ReturnCode);
             if (DriverName.Length > 0) m["driver_name"] = DriverName;
             return m;
         }
@@ -74,6 +75,48 @@ namespace DeviceControlConsole
 
     public static class PnpUtil
     {
+        // pnputil returns SetupAPI codes, which surface as large negative
+        // numbers. Only entries confirmed on a real machine (or plain Win32)
+        // are named; the rest fall back to hex plus pnputil's own message.
+        private static readonly Dictionary<int, string> ExitCodes = BuildExitCodes();
+
+        private static Dictionary<int, string> BuildExitCodes()
+        {
+            Dictionary<int, string> m = new Dictionary<int, string>();
+            m[0] = "succeeded";
+            m[3010] = "succeeded, reboot required";
+            m[2] = "file not found";
+            m[5] = "access denied -- needs administrator";
+            m[87] = "invalid parameter";
+            m[1223] = "the UAC prompt was declined";
+            m[-536870340] = "not an installed OEM INF (already deleted?)";  // 0xE000023C
+            m[-536870339] = "still in use by the system";                   // 0xE000023D
+            return m;
+        }
+
+        public static string DescribeExitCode(int code)
+        {
+            string text;
+            if (ExitCodes.TryGetValue(code, out text)) return text;
+            if (code < 0)
+            {
+                uint u = unchecked((uint)code);
+                if (u >= 0xE0000000u && u <= 0xE0000FFFu)
+                    return "SetupAPI error 0x" + u.ToString("X8");
+                return "error 0x" + u.ToString("X8");
+            }
+            return "exit " + code;
+        }
+
+        /// <summary>Drops pnputil's banner so the real message is line one.</summary>
+        public static string CleanOutput(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            return System.Text.RegularExpressions.Regex.Replace(
+                text, @"\A\s*Microsoft PnP Utility\s*\r?\n\s*\r?\n?", "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+        }
+
         public static string ExePath
         {
             get
@@ -117,7 +160,7 @@ namespace DeviceControlConsole
                     result.ReturnCode = p.ExitCode;
                     string text = (stdout ?? "").Trim();
                     if (text.Length == 0) text = (stderr ?? "").Trim();
-                    result.Output = text;
+                    result.Output = CleanOutput(text);
                 }
             }
             catch (Exception ex)

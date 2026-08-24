@@ -360,5 +360,59 @@ class TestElevatedBatch(unittest.TestCase):
             self.actions.delete_drivers([])
 
 
+class TestExitCodes(unittest.TestCase):
+    """pnputil returns SetupAPI codes as large negative numbers."""
+
+    def setUp(self):
+        if sys.platform != "win32":
+            self.skipTest("pnputil module is Windows-only")
+        from dcc import pnputil
+        self.pnputil = pnputil
+
+    def test_confirmed_codes(self):
+        # Both were observed on a real machine: 0xE000023D from the SetupAPI
+        # log ("INF is still in use by system"), 0xE000023C by deleting a
+        # package that does not exist.
+        self.assertEqual(self.pnputil.describe_exit_code(-536870339),
+                         "still in use by the system")
+        self.assertIn("not an installed OEM INF",
+                      self.pnputil.describe_exit_code(-536870340))
+
+    def test_success_codes(self):
+        self.assertEqual(self.pnputil.describe_exit_code(0), "succeeded")
+        self.assertIn("reboot", self.pnputil.describe_exit_code(3010))
+
+    def test_unknown_setupapi_code_keeps_the_hex(self):
+        self.assertEqual(self.pnputil.describe_exit_code(-536870400),
+                         "SetupAPI error 0xE0000200")
+
+    def test_unknown_positive_code(self):
+        self.assertEqual(self.pnputil.describe_exit_code(99), "exit 99")
+
+    def test_banner_is_stripped_so_the_message_is_first(self):
+        raw = ("Microsoft PnP Utility\n\n"
+               "Failed to delete driver package: The INF is still in use by devices.")
+        cleaned = self.pnputil.clean_output(raw)
+        self.assertTrue(cleaned.startswith("Failed to delete"))
+        self.assertNotIn("Microsoft PnP Utility", cleaned)
+
+    def test_output_without_a_banner_is_untouched(self):
+        self.assertEqual(self.pnputil.clean_output("Driver package deleted."),
+                         "Driver package deleted.")
+
+    def test_empty_output(self):
+        self.assertEqual(self.pnputil.clean_output(""), "")
+
+    def test_batch_results_carry_a_reason(self):
+        from dcc import actions
+        text = ("Microsoft PnP Utility\n\nstill in use\n__DCC_ITEM__0:-536870339\n"
+                "__DCC_ITEM__1:0\n")
+        results = actions._parse_batch_output(
+            text, [["/delete-driver", "oem1.inf"], ["/delete-driver", "oem2.inf"]])
+        self.assertEqual(results[0]["reason"], "still in use by the system")
+        self.assertEqual(results[1]["reason"], "succeeded")
+        self.assertNotIn("Microsoft PnP Utility", results[0]["output"])
+
+
 if __name__ == "__main__":
     unittest.main()

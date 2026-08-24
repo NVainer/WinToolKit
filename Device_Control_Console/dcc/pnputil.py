@@ -9,6 +9,7 @@ console code page can never mangle non-ASCII names.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -85,6 +86,43 @@ def run_xml(args: list[str], timeout: int = 180) -> ET.Element:
             os.remove(path)
         except OSError:
             pass
+
+
+# pnputil returns SetupAPI codes, which surface as large negative numbers.
+# Only entries confirmed against this machine (or plain Win32) are named; the
+# rest fall back to the hex value plus whatever pnputil printed.
+EXIT_CODES = {
+    0: "succeeded",
+    3010: "succeeded, reboot required",
+    2: "file not found",
+    5: "access denied -- needs administrator",
+    87: "invalid parameter",
+    1223: "the UAC prompt was declined",
+    -536870340: "not an installed OEM INF (already deleted?)",   # 0xE000023C
+    -536870339: "still in use by the system",                    # 0xE000023D
+}
+
+
+def describe_exit_code(code: int) -> str:
+    """A readable reason for a pnputil exit code."""
+    if code in EXIT_CODES:
+        return EXIT_CODES[code]
+    if code < 0:
+        unsigned = code & 0xFFFFFFFF
+        if 0xE0000000 <= unsigned <= 0xE0000FFF:
+            return "SetupAPI error 0x%08X" % unsigned
+        return "error 0x%08X" % unsigned
+    return "exit %d" % code
+
+
+_BANNER = re.compile(r"^\s*Microsoft PnP Utility\s*\r?\n\s*\r?\n?", re.IGNORECASE)
+
+
+def clean_output(text: str) -> str:
+    """Drop pnputil's banner so the actual message is the first line."""
+    if not text:
+        return ""
+    return _BANNER.sub("", text, count=1).strip()
 
 
 def _text(node: ET.Element | None) -> str:
@@ -198,7 +236,8 @@ def _action(args: list[str], timeout: int = 300) -> dict:
         "returncode": proc.returncode,
         "ok": proc.returncode in (0, 3010),  # 3010 == success, reboot required
         "reboot_required": proc.returncode == 3010,
-        "output": output or err,
+        "reason": describe_exit_code(proc.returncode),
+        "output": clean_output(output or err),
     }
 
 

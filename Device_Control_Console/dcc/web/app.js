@@ -42,6 +42,14 @@ function toast(title, body, kind = "") {
   return el;
 }
 
+/** pnputil prefixes its output with a banner; the useful line comes after it. */
+function firstMeaningfulLine(text) {
+  const lines = String(text || "").split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !/^microsoft pnp utility$/i.test(l));
+  return lines[0] || "(no message)";
+}
+
 function fmtDate(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -273,11 +281,19 @@ function cleanupRows() {
   const rows = [];
   for (const d of snap.drivers) {
     if (d.orphaned) {
+      // "No device uses it" is about PnP device nodes only. Printer INFs are
+      // held by the print spooler, and packages installed by an application
+      // (Office registers OneNote's printer INF, for instance) are held by
+      // that application -- Windows refuses those with "still in use by the
+      // system" no matter how orphaned they look here.
+      const spoolerHeld = /^printer$/i.test(d.class_name || "");
       rows.push({
         kind: "Orphaned package", severity: "orphan", driver_name: d.driver_name,
         name: `${d.driver_name} \u2014 ${d.original_name}`,
         detail: `${d.provider_name} \u00b7 ${d.driver_version}`,
-        hint: "No device uses it. Safe to delete in most cases.",
+        hint: spoolerHeld
+          ? "No device uses it, but printer INFs are held by the print spooler \u2014 deletion often fails."
+          : "No device node uses it. Windows may still refuse if another component holds it.",
         _driver: d,
       });
     }
@@ -1355,8 +1371,8 @@ async function confirmDeleteDriver(names) {
     ? `Deleted ${res.succeeded} package(s)${res.reboot_required ? " — reboot required" : ""}`
     : `${res.succeeded} deleted, ${res.failed} failed`;
   toast(headline, (res.results || [])
-    .map((r) => `${r.driver_name}  exit ${r.returncode}` +
-      (r.ok ? "" : `\n    ${(r.output || "").split("\n").slice(0, 2).join(" ").trim()}`))
+    .map((r) => `${r.driver_name}  ${r.reason || "exit " + r.returncode}` +
+      (r.ok ? "" : `\n    ${firstMeaningfulLine(r.output)}`))
     .join("\n"), kind);
 
   state.checked.clear();

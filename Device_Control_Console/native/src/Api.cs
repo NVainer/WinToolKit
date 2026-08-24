@@ -322,7 +322,7 @@ namespace DeviceControlConsole
                     if (r.Ok) okCount++;
                     if (r.RebootRequired) reboot = true;
                     items.Add(r.ToMap());
-                    lines.Add(r.DriverName + ": exit " + r.ReturnCode);
+                    lines.Add(r.DriverName + ": " + PnpUtil.DescribeExitCode(r.ReturnCode));
                 }
                 Cache.Invalidate();
                 Dictionary<string, object> summary = Json.Obj();

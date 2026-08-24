@@ -159,7 +159,7 @@ namespace DeviceControlConsole
                 r.ReturnCode = codes.ContainsKey(i) ? codes[i] : -1;
                 r.Ok = r.ReturnCode == 0 || r.ReturnCode == 3010;
                 r.RebootRequired = r.ReturnCode == 3010;
-                string body = bodies.ContainsKey(i) ? bodies[i].Trim() : "";
+                string body = bodies.ContainsKey(i) ? PnpUtil.CleanOutput(bodies[i]) : "";
                 if (body.Length == 0) body = r.ReturnCode == -1 ? "did not run" : "(no output)";
                 r.Output = body;
                 results.Add(r);

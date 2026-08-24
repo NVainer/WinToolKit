@@ -117,7 +117,8 @@ def _parse_batch_output(text: str, commands: list[list[str]]) -> list[dict]:
             "returncode": code,
             "ok": code in (0, 3010),
             "reboot_required": code == 3010,
-            "output": body.strip() or ("(no output)" if code != -1 else "did not run"),
+            "reason": pnputil.describe_exit_code(code) if code != -1 else "did not run",
+            "output": pnputil.clean_output(body) or ("(no output)" if code != -1 else "did not run"),
         })
     return results
 
@@ -156,6 +157,7 @@ def run_elevated(commands: list[list[str]], timeout: int = 900) -> list[dict]:
                 "returncode": 1223,
                 "ok": False,
                 "reboot_required": False,
+                "reason": pnputil.describe_exit_code(1223),
                 "output": reason,
             } for args in commands]
 
@@ -240,8 +242,8 @@ def delete_drivers(oem_infs: list[str], uninstall: bool = False, force: bool = F
         "results": results,
         "command": f"pnputil /delete-driver x{len(names)}",
         "output": "\n".join(
-            f"{r['driver_name']}: exit {r['returncode']}"
-            + ("" if r["ok"] else f" -- {r['output'].splitlines()[0] if r['output'] else ''}")
+            f"{r['driver_name']}: {r.get('reason') or ('exit ' + str(r['returncode']))}"
+            + ("" if r["ok"] else f"\n    {r['output'].splitlines()[0] if r['output'] else ''}")
             for r in results
         ),
     }

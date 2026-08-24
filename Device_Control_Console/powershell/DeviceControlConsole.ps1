@@ -1111,6 +1111,41 @@ function Assert-InstanceId {
     return $trimmed
 }
 
+# pnputil returns SetupAPI codes, which surface as large negative numbers.
+# Only entries confirmed on a real machine (or plain Win32) are named.
+$script:ExitCodeText = @{
+    0 = 'succeeded'
+    3010 = 'succeeded, reboot required'
+    2 = 'file not found'
+    5 = 'access denied -- needs administrator'
+    87 = 'invalid parameter'
+    1223 = 'the UAC prompt was declined'
+    -536870340 = 'not an installed OEM INF (already deleted?)'   # 0xE000023C
+    -536870339 = 'still in use by the system'                    # 0xE000023D
+}
+
+function Get-PnpExitReason {
+    param([int]$Code)
+    if ($script:ExitCodeText.ContainsKey($Code)) { return $script:ExitCodeText[$Code] }
+    if ($Code -lt 0) {
+        $u = [BitConverter]::ToUInt32([BitConverter]::GetBytes($Code), 0)
+        # The L suffix matters: PowerShell reads a bare 0xE0000000 as a
+        # *negative* Int32, which makes the range test silently false.
+        if ($u -ge [uint32]0xE0000000L -and $u -le [uint32]0xE0000FFFL) {
+            return ('SetupAPI error 0x{0:X8}' -f $u)
+        }
+        return ('error 0x{0:X8}' -f $u)
+    }
+    return "exit $Code"
+}
+
+function Remove-PnpBanner {
+    <#  pnputil prints "Microsoft PnP Utility" first; the useful line follows.  #>
+    param([string]$Text)
+    if (-not $Text) { return '' }
+    return ($Text -replace '(?im)^\s*Microsoft PnP Utility\s*\r?\n\s*\r?\n?', '').Trim()
+}
+
 function New-PnpBatchScript {
     <#
         Writes a .cmd that runs each pnputil call and records its own exit code.
@@ -1159,8 +1194,9 @@ function Split-PnpBatchOutput {
             returncode = $code
             ok = ($code -eq 0 -or $code -eq 3010)
             reboot_required = ($code -eq 3010)
+            reason = $(if ($code -eq -1) { 'did not run' } else { Get-PnpExitReason -Code $code })
             elevated = $true
-            output = $body
+            output = (Remove-PnpBanner -Text $body)
         })
     }
     return $results
@@ -1176,13 +1212,15 @@ function Invoke-PnpActionBatch {
         foreach ($cmd in $Commands) {
             $out = & $script:PnpUtilPath @cmd 2>&1 | Out-String
             $code = $LASTEXITCODE
+            $cleaned = Remove-PnpBanner -Text $out
             $null = $results.Add(@{
                 command = "pnputil $(@($cmd) -join ' ')"
                 returncode = $code
                 ok = ($code -eq 0 -or $code -eq 3010)
                 reboot_required = ($code -eq 3010)
+                reason = (Get-PnpExitReason -Code $code)
                 elevated = $true
-                output = $(if ($out.Trim()) { $out.Trim() } else { '(no output)' })
+                output = $(if ($cleaned) { $cleaned } else { '(no output)' })
             })
         }
         return $results
@@ -1200,13 +1238,15 @@ function Invoke-PnpActionBatch {
             # Nothing ran at all: almost always a declined UAC prompt.
             return @($Commands | ForEach-Object {
                 @{ command = "pnputil $(@($_) -join ' ')"; returncode = 1223; ok = $false
-                   reboot_required = $false; elevated = $true; output = 'Elevation was cancelled.' } })
+                   reboot_required = $false; elevated = $true; reason = 'the UAC prompt was declined'
+                   output = 'Elevation was cancelled.' } })
         }
         return Split-PnpBatchOutput -Text $text -Commands $Commands
     } catch {
         return @($Commands | ForEach-Object {
             @{ command = "pnputil $(@($_) -join ' ')"; returncode = 1223; ok = $false
-               reboot_required = $false; elevated = $true; output = 'Elevation was cancelled.' } })
+               reboot_required = $false; elevated = $true; reason = 'the UAC prompt was declined'
+               output = 'Elevation was cancelled.' } })
     } finally {
         foreach ($f in @($tmp, $scriptPath)) {
             if ($f -and (Test-Path -LiteralPath $f)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
@@ -1560,7 +1600,7 @@ function Invoke-ApiRoute {
                                 reboot_required = (@($batch | Where-Object { $_.reboot_required }).Count -gt 0)
                                 elevated = $true; results = $batch
                                 command = "pnputil /delete-driver x$($names.Count)"
-                                output = (($batch | ForEach-Object { "$($_.driver_name): exit $($_.returncode)" }) -join "`n")
+                                output = (($batch | ForEach-Object { "$($_.driver_name): $($_.reason)" }) -join "`n")
                             }
                         }
                         'export-driver' {
