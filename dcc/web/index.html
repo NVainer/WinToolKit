@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Device Control Console</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232f6feb'/><path d='M9 11h14M9 16h14M9 21h9' stroke='white' stroke-width='2.4' stroke-linecap='round'/></svg>">
+</head>
+<body>
+<script>window.DCC_TOKEN = "__DCC_TOKEN__";</script>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo"></span>
+    <div>
+      <h1>Device Control Console</h1>
+      <p class="sub" id="metaLine">loading…</p>
+    </div>
+  </div>
+
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="Search name, instance ID, VID/PID, driver, class, vendor…" autocomplete="off" spellcheck="false">
+    <kbd>/</kbd>
+  </div>
+
+  <div class="topbar-actions">
+    <span class="badge" id="elevBadge" title="Administrator status">…</span>
+    <button id="btnRefresh" class="btn" title="Re-read devices and driver store (F5)">Refresh</button>
+    <div class="menu">
+      <button class="btn" id="btnMore">More ▾</button>
+      <div class="menu-panel" id="morePanel" hidden>
+        <button data-act="export-devices-csv">Export devices (CSV)</button>
+        <button data-act="export-devices-json">Export devices (JSON)</button>
+        <button data-act="export-drivers-csv">Export driver store (CSV)</button>
+        <button data-act="export-drivers-json">Export driver store (JSON)</button>
+        <hr>
+        <button data-act="scan-devices">Scan for hardware changes</button>
+        <button data-act="add-driver">Add driver package to store…</button>
+        <hr>
+        <button data-act="update-hwids">Update USB/PCI ID database</button>
+        <button data-act="toggle-theme">Toggle light / dark</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-view="devices" role="tab">Devices <span class="count" id="cDevices">0</span></button>
+  <button class="tab" data-view="drivers" role="tab">Driver store <span class="count" id="cDrivers">0</span></button>
+  <button class="tab" data-view="cleanup" role="tab">Cleanup <span class="count warn" id="cCleanup">0</span></button>
+  <button class="tab" data-view="tree" role="tab">Device tree</button>
+  <div class="tab-spacer"></div>
+  <div class="filters" id="filters"></div>
+</nav>
+
+<main>
+  <section class="table-pane" id="tablePane">
+    <div class="table-scroll">
+      <table id="grid">
+        <thead id="gridHead"></thead>
+        <tbody id="gridBody"></tbody>
+      </table>
+      <p class="empty" id="emptyState" hidden>Nothing matches the current search and filters.</p>
+    </div>
+    <footer class="table-foot">
+      <span id="rowInfo">—</span>
+      <span class="spacer"></span>
+      <span id="selInfo"></span>
+      <button class="btn danger small" id="btnBulkDelete" hidden>Delete selected packages…</button>
+    </footer>
+  </section>
+
+  <aside class="detail" id="detail" hidden>
+    <div class="detail-head">
+      <div>
+        <h2 id="detailTitle">—</h2>
+        <p id="detailSub" class="sub"></p>
+      </div>
+      <button class="icon-btn" id="btnCloseDetail" title="Close (Esc)">×</button>
+    </div>
+    <div class="detail-body" id="detailBody"></div>
+  </aside>
+</main>
+
+<div class="modal-backdrop" id="modalBackdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3 id="modalTitle">Confirm</h3>
+    <div id="modalBody"></div>
+    <div class="modal-actions">
+      <button class="btn" id="modalCancel">Cancel</button>
+      <button class="btn danger" id="modalOk">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

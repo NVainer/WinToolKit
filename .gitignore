@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# local caches / exports
+*.csv
+*.log
+usb.ids
+pci.ids
+/exports/
+/out/
+
+# editors
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
