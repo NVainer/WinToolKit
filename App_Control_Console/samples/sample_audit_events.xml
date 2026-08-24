@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<Events>
+  <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+    <System>
+      <Provider Name="Microsoft-Windows-CodeIntegrity" Guid="{4ee76bd8-3cf4-44a0-a0ac-3937643e37a3}" />
+      <EventID>3076</EventID>
+      <Version>5</Version>
+      <Level>3</Level>
+      <Task>0</Task>
+      <Opcode>111</Opcode>
+      <Keywords>0x8000000000000000</Keywords>
+      <TimeCreated SystemTime="2026-08-01T10:15:00.1234567Z" />
+      <EventRecordID>18231</EventRecordID>
+      <Correlation ActivityID="{aa11bb22-cc33-dd44-ee55-ff6677889900}" />
+      <Execution ProcessID="4" ThreadID="812" />
+      <Channel>Microsoft-Windows-CodeIntegrity/Operational</Channel>
+      <Computer>WS-042.contoso.com</Computer>
+      <Security UserID="S-1-5-18" />
+    </System>
+    <EventData>
+      <Data Name="FileNameLength">62</Data>
+      <Data Name="FileNameBuffer">\Device\HarddiskVolume3\Users\dana\Downloads\GreenshotSetup.exe</Data>
+      <Data Name="ProcessNameLength">45</Data>
+      <Data Name="ProcessNameBuffer">\Device\HarddiskVolume3\Windows\explorer.exe</Data>
+      <Data Name="RequestedSigningLevel">2</Data>
+      <Data Name="ValidatedSigningLevel">1</Data>
+      <Data Name="Status">0xc0e90002</Data>
+      <Data Name="SHA1Hash">A1B2C3D4E5F60718293A4B5C6D7E8F9012345678</Data>
+      <Data Name="SHA256Hash">0F1E2D3C4B5A69788796A5B4C3D2E1F00112233445566778899AABBCCDDEEFF0</Data>
+      <Data Name="SHA1FlatHash">B2C3D4E5F60718293A4B5C6D7E8F901234567890</Data>
+      <Data Name="SHA256FlatHash">1F2E3D4C5B6A798897A6B5C4D3E2F10011223344556677889900AABBCCDDEEFF</Data>
+      <Data Name="USN">1409286144</Data>
+      <Data Name="SISigningScenario">1</Data>
+      <Data Name="PolicyNameLength">31</Data>
+      <Data Name="PolicyNameBuffer">Contoso Workstation Base Policy</Data>
+      <Data Name="PolicyIDLength">6</Data>
+      <Data Name="PolicyIDBuffer">062125</Data>
+      <Data Name="PolicyHashSize">32</Data>
+      <Data Name="PolicyHash">77E1A559C13FBE35CFC279D0E8B2C4A6D9F01234567890ABCDEF0123456789AB</Data>
+      <Data Name="OriginalFileNameLength">18</Data>
+      <Data Name="OriginalFileNameBuffer">Greenshot.exe</Data>
+      <Data Name="InternalNameLength">9</Data>
+      <Data Name="InternalNameBuffer">Greenshot</Data>
+      <Data Name="FileDescriptionLength">30</Data>
+      <Data Name="FileDescriptionBuffer">Greenshot screenshot utility</Data>
+      <Data Name="ProductNameLength">9</Data>
+      <Data Name="ProductNameBuffer">Greenshot</Data>
+      <Data Name="FileVersionLength">14</Data>
+      <Data Name="FileVersionBuffer">1.3.290.0</Data>
+      <Data Name="PolicyGUID">{A6D7E31F-3C49-4C2E-9B11-4E1A2D8F0C55}</Data>
+      <Data Name="UserWriteable">true</Data>
+      <Data Name="PackageFamilyNameLength">0</Data>
+      <Data Name="PackageFamilyNameBuffer"></Data>
+    </EventData>
+  </Event>
+  <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+    <System>
+      <Provider Name="Microsoft-Windows-CodeIntegrity" Guid="{4ee76bd8-3cf4-44a0-a0ac-3937643e37a3}" />
+      <EventID>3089</EventID>
+      <Version>1</Version>
+      <Level>4</Level>
+      <Task>0</Task>
+      <Opcode>0</Opcode>
+      <Keywords>0x8000000000000000</Keywords>
+      <TimeCreated SystemTime="2026-08-01T10:15:00.1244567Z" />
+      <EventRecordID>18232</EventRecordID>
+      <Correlation ActivityID="{aa11bb22-cc33-dd44-ee55-ff6677889900}" />
+      <Execution ProcessID="4" ThreadID="812" />
+      <Channel>Microsoft-Windows-CodeIntegrity/Verbose</Channel>
+      <Computer>WS-042.contoso.com</Computer>
+      <Security UserID="S-1-5-18" />
+    </System>
+    <EventData>
+      <Data Name="TotalSignatureCount">1</Data>
+      <Data Name="Signature">0</Data>
+      <Data Name="CacheState">0</Data>
+      <Data Name="HashSize">32</Data>
+      <Data Name="Hash">0F1E2D3C4B5A69788796A5B4C3D2E1F00112233445566778899AABBCCDDEEFF0</Data>
+      <Data Name="PageHash">false</Data>
+      <Data Name="SignatureType">4</Data>
+      <Data Name="ValidatedSigningLevel">1</Data>
+      <Data Name="VerificationError">26</Data>
+      <Data Name="Flags">0</Data>
+      <Data Name="PolicyBits">1026</Data>
+      <Data Name="NotValidBefore">2025-03-11T00:00:00.0000000Z</Data>
+      <Data Name="NotValidAfter">2028-03-11T23:59:59.0000000Z</Data>
+      <Data Name="PublisherNameLength">13</Data>
+      <Data Name="PublisherNameBuffer">Greenshot GmbH</Data>
+      <Data Name="IssuerNameLength">42</Data>
+      <Data Name="IssuerNameBuffer">DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1</Data>
+      <Data Name="PublisherTBSHashSize">32</Data>
+      <Data Name="PublisherTBSHash">C4D5E6F708192A3B4C5D6E7F809122334455667788990011223344556677AABB</Data>
+      <Data Name="IssuerTBSHashSize">32</Data>
+      <Data Name="IssuerTBSHash">7E7D8C9BAAB9C8D7E6F5041322314455667788990011AABBCCDDEEFF00112233</Data>
+    </EventData>
+  </Event>
+  <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+    <System>
+      <Provider Name="Microsoft-Windows-CodeIntegrity" Guid="{4ee76bd8-3cf4-44a0-a0ac-3937643e37a3}" />
+      <EventID>3077</EventID>
+      <Version>5</Version>
+      <Level>2</Level>
+      <Task>0</Task>
+      <Opcode>111</Opcode>
+      <Keywords>0x8000000000000000</Keywords>
+      <TimeCreated SystemTime="2026-08-02T09:41:11.5551234Z" />
+      <EventRecordID>18310</EventRecordID>
+      <Correlation ActivityID="{bb22cc33-dd44-ee55-ff66-778899001122}" />
+      <Execution ProcessID="4" ThreadID="990" />
+      <Channel>Microsoft-Windows-CodeIntegrity/Operational</Channel>
+      <Computer>WS-017.contoso.com</Computer>
+      <Security UserID="S-1-5-21-397955417-626881126-188441444-1010" />
+    </System>
+    <EventData>
+      <Data Name="FileNameLength">58</Data>
+      <Data Name="FileNameBuffer">\Device\HarddiskVolume3\Tools\Sysinternals\procexp64.exe</Data>
+      <Data Name="ProcessNameLength">44</Data>
+      <Data Name="ProcessNameBuffer">\Device\HarddiskVolume3\Windows\explorer.exe</Data>
+      <Data Name="RequestedSigningLevel">2</Data>
+      <Data Name="ValidatedSigningLevel">2</Data>
+      <Data Name="Status">0xc0e90002</Data>
+      <Data Name="SHA1Hash">FEDCBA9876543210FEDCBA9876543210FEDCBA98</Data>
+      <Data Name="SHA256Hash">89ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF01234567</Data>
+      <Data Name="SHA1FlatHash">0123456789ABCDEF0123456789ABCDEF01234567</Data>
+      <Data Name="SHA256FlatHash">76543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA98</Data>
+      <Data Name="USN">1409322544</Data>
+      <Data Name="SISigningScenario">1</Data>
+      <Data Name="PolicyNameLength">31</Data>
+      <Data Name="PolicyNameBuffer">Contoso Workstation Base Policy</Data>
+      <Data Name="PolicyIDLength">6</Data>
+      <Data Name="PolicyIDBuffer">062125</Data>
+      <Data Name="PolicyHashSize">32</Data>
+      <Data Name="PolicyHash">77E1A559C13FBE35CFC279D0E8B2C4A6D9F01234567890ABCDEF0123456789AB</Data>
+      <Data Name="OriginalFileNameLength">13</Data>
+      <Data Name="OriginalFileNameBuffer">procexp.exe</Data>
+      <Data Name="InternalNameLength">16</Data>
+      <Data Name="InternalNameBuffer">Process Explorer</Data>
+      <Data Name="FileDescriptionLength">26</Data>
+      <Data Name="FileDescriptionBuffer">Sysinternals Process Explorer</Data>
+      <Data Name="ProductNameLength">20</Data>
+      <Data Name="ProductNameBuffer">Process Explorer</Data>
+      <Data Name="FileVersionLength">10</Data>
+      <Data Name="FileVersionBuffer">17.5.0.0</Data>
+      <Data Name="PolicyGUID">{A6D7E31F-3C49-4C2E-9B11-4E1A2D8F0C55}</Data>
+      <Data Name="UserWriteable">false</Data>
+      <Data Name="PackageFamilyNameLength">0</Data>
+      <Data Name="PackageFamilyNameBuffer"></Data>
+    </EventData>
+  </Event>
+  <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+    <System>
+      <Provider Name="Microsoft-Windows-AppLocker" Guid="{cbda4dbf-8d5d-4f69-9578-be14aa540d22}" />
+      <EventID>8029</EventID>
+      <Version>0</Version>
+      <Level>2</Level>
+      <Task>0</Task>
+      <Opcode>0</Opcode>
+      <Keywords>0x4000000000000000</Keywords>
+      <TimeCreated SystemTime="2026-08-02T11:02:45.0001234Z" />
+      <EventRecordID>512</EventRecordID>
+      <Correlation />
+      <Execution ProcessID="7788" ThreadID="1200" />
+      <Channel>Microsoft-Windows-AppLocker/MSI and Script</Channel>
+      <Computer>WS-017.contoso.com</Computer>
+      <Security UserID="S-1-5-21-397955417-626881126-188441444-1010" />
+    </System>
+    <EventData>
+      <Data Name="PolicyNameLength">31</Data>
+      <Data Name="PolicyNameBuffer">Contoso Workstation Base Policy</Data>
+      <Data Name="PolicyIdLength">6</Data>
+      <Data Name="PolicyIdBuffer">062125</Data>
+      <Data Name="FilePathLength">49</Data>
+      <Data Name="FilePathBuffer">C:\Users\dana\AppData\Local\Temp\installhelper.ps1</Data>
+      <Data Name="Sha1Hash">1111222233334444555566667777888899990000</Data>
+      <Data Name="Sha256Hash">AAAABBBBCCCCDDDDEEEEFFFF0000111122223333444455556666777788889999</Data>
+      <Data Name="UserWriteable">true</Data>
+    </EventData>
+  </Event>
+</Events>
