@@ -123,8 +123,6 @@ named from its interface children, which the fast path does return.
 
 ### Native exe
 
-### Native exe
-
 ```bash
 native\build.cmd
 ```
@@ -143,7 +141,7 @@ falls back to `%LOCALAPPDATA%` when it is not.
 
 ## Requirements
 
-Windows 10 21H2 / Windows 11 or newer — both builds need `pnputil /format xml`.
+Windows 10 21H2 / Windows 11 or newer — every build needs `pnputil /format xml`.
 
 ## Run
 
@@ -282,7 +280,7 @@ non-English Windows too.
 ## Layout
 
 ```
-dcc/
+dcc/            Python build
   cfgmgr.py     ctypes wrapper over cfgmgr32.dll
   devprops.py   DEVPKEY table, status/problem decoding, class->type map
   pnputil.py    pnputil XML enumeration + action verbs
@@ -292,7 +290,12 @@ dcc/
   actions.py    validation and elevation
   server.py     local HTTP API
   cli.py        command line
-  web/          the single-page UI (no dependencies, no CDN)
+  web/          the single-page UI -- shared by all three builds
+powershell/     PowerShell build
+  DeviceControlConsole.ps1   the whole console in one script
+native/         native build
+  src/*.cs      C# port of the backend
+  build.cmd     compiles with the in-box csc.exe
 tests/          unittest suite for the pure logic
 ```
 
