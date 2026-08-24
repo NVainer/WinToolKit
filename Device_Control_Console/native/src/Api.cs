@@ -295,10 +295,52 @@ namespace DeviceControlConsole
             ActionResult result;
 
             if (verb == "delete-driver")
-                result = Actions.DeleteDriver(Json.Str(payload, "driver_name"),
+            {
+                List<string> names = new List<string>();
+                object raw;
+                if (payload.TryGetValue("driver_names", out raw))
+                {
+                    List<object> list = raw as List<object>;
+                    if (list != null)
+                        foreach (object o in list) if (o != null) names.Add(o.ToString());
+                }
+                if (names.Count == 0)
+                {
+                    string single = Json.Str(payload, "driver_name");
+                    if (single.Length > 0) names.Add(single);
+                }
+                List<ActionResult> batch = Actions.DeleteDrivers(names,
                     Json.Flag(payload, "uninstall"), Json.Flag(payload, "force"),
                     Json.Flag(payload, "reboot"));
-            else if (verb == "export-driver")
+
+                int okCount = 0;
+                bool reboot = false;
+                List<object> items = new List<object>();
+                List<string> lines = new List<string>();
+                foreach (ActionResult r in batch)
+                {
+                    if (r.Ok) okCount++;
+                    if (r.RebootRequired) reboot = true;
+                    items.Add(r.ToMap());
+                    lines.Add(r.DriverName + ": exit " + r.ReturnCode);
+                }
+                Cache.Invalidate();
+                Dictionary<string, object> summary = Json.Obj();
+                summary["verb"] = "delete-driver";
+                summary["count"] = batch.Count;
+                summary["succeeded"] = okCount;
+                summary["failed"] = batch.Count - okCount;
+                summary["ok"] = okCount == batch.Count;
+                summary["reboot_required"] = reboot;
+                summary["elevated"] = true;
+                summary["results"] = items;
+                summary["command"] = "pnputil /delete-driver x" + batch.Count;
+                summary["output"] = string.Join("\n", lines.ToArray());
+                return Response.Json(summary, 200);
+            }
+            // Everything below returns a single result; the delete branch above
+            // returns its own batch summary.
+            if (verb == "export-driver")
                 result = Actions.ExportDriver(Json.Str(payload, "driver_name"),
                     Json.Str(payload, "target_dir"));
             else if (verb == "add-driver")

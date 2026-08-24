@@ -80,83 +80,150 @@ namespace DeviceControlConsole
         }
 
         // --------------------------------------------------------- dispatch
-        private static ActionResult Dispatch(string[] args)
+        /// <summary>Runs a batch, elevating once for the whole thing when needed.</summary>
+        public static List<ActionResult> DispatchMany(List<string[]> commands)
         {
+            if (commands == null || commands.Count == 0) return new List<ActionResult>();
             if (IsElevated())
             {
-                ActionResult direct = PnpUtil.Run(args, 300000);
-                direct.Elevated = true;
-                return direct;
+                List<ActionResult> results = new List<ActionResult>();
+                foreach (string[] args in commands)
+                {
+                    ActionResult direct = PnpUtil.Run(args, 300000);
+                    direct.Elevated = true;
+                    results.Add(direct);
+                }
+                return results;
             }
-            return RunElevated(args);
+            return RunElevated(commands);
         }
 
+        private static ActionResult Dispatch(string[] args)
+        {
+            List<string[]> one = new List<string[]>();
+            one.Add(args);
+            return DispatchMany(one)[0];
+        }
+
+        private const string ItemMark = "__DCC_ITEM__";
+
         /// <summary>
-        /// Runs pnputil through UAC, capturing output and the exit code.
-        /// ShellExecute (which "runas" requires) cannot redirect streams, so an
-        /// elevated cmd.exe writes to a temp file that this process reads back.
+        /// A .cmd that runs each pnputil call and records its own exit code.
+        ///
+        /// Handing the whole pipeline to <c>cmd /c</c> as a single argument does
+        /// not survive cmd's quote-stripping rule: a string beginning with a
+        /// quote and containing several more comes back as "The filename,
+        /// directory name, or volume label syntax is incorrect". A script file
+        /// has no such rule, and it lets a batch run behind one UAC prompt
+        /// rather than one prompt per package.
         /// </summary>
-        public static ActionResult RunElevated(string[] args)
+        private static string WriteBatchScript(List<string[]> commands, string outPath)
+        {
+            string script = Path.Combine(Path.GetTempPath(),
+                "dcc_run_" + Guid.NewGuid().ToString("N") + ".cmd");
+            StringBuilder sb = new StringBuilder();
+            sb.Append("@echo off\r\n");
+            for (int i = 0; i < commands.Count; i++)
+            {
+                sb.Append("echo.>> ").Append(Quote(outPath)).Append("\r\n");
+                sb.Append(Quote(PnpUtil.ExePath));
+                foreach (string a in commands[i]) sb.Append(' ').Append(Quote(a));
+                sb.Append(" >> ").Append(Quote(outPath)).Append(" 2>&1\r\n");
+                // %ERRORLEVEL% expands as each line is read, so this catches the
+                // call immediately above it.
+                sb.Append("echo ").Append(ItemMark).Append(i).Append(":%ERRORLEVEL%>> ")
+                  .Append(Quote(outPath)).Append("\r\n");
+            }
+            File.WriteAllText(script, sb.ToString(), Encoding.ASCII);
+            return script;
+        }
+
+        private static List<ActionResult> SplitBatchOutput(string text, List<string[]> commands)
+        {
+            List<ActionResult> results = new List<ActionResult>();
+            Dictionary<int, int> codes = new Dictionary<int, int>();
+            Dictionary<int, string> bodies = new Dictionary<int, string>();
+            int cursor = 0;
+            foreach (Match m in Regex.Matches(text, ItemMark + @"(\d+):(-?\d+)"))
+            {
+                int index = int.Parse(m.Groups[1].Value);
+                codes[index] = int.Parse(m.Groups[2].Value);
+                bodies[index] = text.Substring(cursor, m.Index - cursor);
+                cursor = m.Index + m.Length;
+            }
+            for (int i = 0; i < commands.Count; i++)
+            {
+                ActionResult r = new ActionResult();
+                r.Command = "pnputil " + PnpUtil.JoinArgs(commands[i]);
+                r.Elevated = true;
+                r.ReturnCode = codes.ContainsKey(i) ? codes[i] : -1;
+                r.Ok = r.ReturnCode == 0 || r.ReturnCode == 3010;
+                r.RebootRequired = r.ReturnCode == 3010;
+                string body = bodies.ContainsKey(i) ? bodies[i].Trim() : "";
+                if (body.Length == 0) body = r.ReturnCode == -1 ? "did not run" : "(no output)";
+                r.Output = body;
+                results.Add(r);
+            }
+            return results;
+        }
+
+        private static List<ActionResult> Cancelled(List<string[]> commands, string why)
+        {
+            List<ActionResult> results = new List<ActionResult>();
+            foreach (string[] args in commands)
+            {
+                ActionResult r = new ActionResult();
+                r.Command = "pnputil " + PnpUtil.JoinArgs(args);
+                r.Elevated = true;
+                r.ReturnCode = 1223;   // ERROR_CANCELLED
+                r.Output = why;
+                results.Add(r);
+            }
+            return results;
+        }
+
+        /// <summary>Runs one or more pnputil calls through a single UAC prompt.</summary>
+        public static List<ActionResult> RunElevated(List<string[]> commands)
         {
             string outPath = Path.Combine(Path.GetTempPath(),
                 "dcc_elev_" + Guid.NewGuid().ToString("N") + ".txt");
-            ActionResult result = new ActionResult();
-            result.Command = "pnputil " + PnpUtil.JoinArgs(args);
-            result.Elevated = true;
+            string script = null;
             try
             {
-                StringBuilder inner = new StringBuilder();
-                inner.Append("/c ");
-                inner.Append(Quote(PnpUtil.ExePath));
-                for (int i = 0; i < args.Length; i++) { inner.Append(' ').Append(Quote(args[i])); }
-                inner.Append(" > ").Append(Quote(outPath)).Append(" 2>&1");
-                inner.Append(" & echo __DCC_EXIT__%ERRORLEVEL% >> ").Append(Quote(outPath));
+                File.WriteAllText(outPath, "");
+                script = WriteBatchScript(commands, outPath);
 
-                ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", inner.ToString());
+                ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c " + Quote(script));
                 psi.UseShellExecute = true;      // required for the runas verb
                 psi.Verb = "runas";
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
-                psi.CreateNoWindow = true;
 
                 using (Process p = Process.Start(psi))
                 {
-                    if (!p.WaitForExit(600000))
-                    {
-                        result.Output = "the elevated command did not finish in time";
-                        return result;
-                    }
+                    if (!p.WaitForExit(900000))
+                        return Cancelled(commands, "the elevated command did not finish in time");
                 }
 
                 string text = "";
                 try { if (File.Exists(outPath)) text = File.ReadAllText(outPath); }
                 catch (IOException) { }
 
-                Match m = Regex.Match(text, @"__DCC_EXIT__(-?\d+)");
-                if (m.Success)
-                {
-                    result.ReturnCode = int.Parse(m.Groups[1].Value);
-                    text = text.Substring(0, m.Index).TrimEnd();
-                }
-                result.Output = text.Trim().Length > 0 ? text.Trim() : "(no output)";
-                result.Ok = result.ReturnCode == 0 || result.ReturnCode == 3010;
-                result.RebootRequired = result.ReturnCode == 3010;
-                return result;
+                if (text.IndexOf(ItemMark, StringComparison.Ordinal) < 0)
+                    return Cancelled(commands, "Elevation was cancelled.");
+                return SplitBatchOutput(text, commands);
             }
             catch (System.ComponentModel.Win32Exception)
             {
-                // 1223 == ERROR_CANCELLED, i.e. the UAC prompt was declined.
-                result.Output = "Elevation was cancelled.";
-                result.ReturnCode = 1223;
-                return result;
+                return Cancelled(commands, "Elevation was cancelled.");
             }
             catch (Exception ex)
             {
-                result.Output = ex.GetType().Name + ": " + ex.Message;
-                return result;
+                return Cancelled(commands, ex.GetType().Name + ": " + ex.Message);
             }
             finally
             {
                 try { if (File.Exists(outPath)) File.Delete(outPath); } catch (IOException) { }
+                try { if (script != null && File.Exists(script)) File.Delete(script); } catch (IOException) { }
             }
         }
 
@@ -166,15 +233,40 @@ namespace DeviceControlConsole
         }
 
         // ----------------------------------------------------------- verbs
-        public static ActionResult DeleteDriver(string oemInf, bool uninstall, bool force, bool reboot)
+        private static string[] DeleteArgs(string name, bool uninstall, bool force, bool reboot)
         {
-            string name = ValidateOemInf(oemInf);
             List<string> args = new List<string>();
             args.Add("/delete-driver"); args.Add(name);
             if (uninstall) args.Add("/uninstall");
             if (force) args.Add("/force");
             if (reboot) args.Add("/reboot");
-            return Dispatch(args.ToArray());
+            return args.ToArray();
+        }
+
+        public static ActionResult DeleteDriver(string oemInf, bool uninstall, bool force, bool reboot)
+        {
+            return Dispatch(DeleteArgs(ValidateOemInf(oemInf), uninstall, force, reboot));
+        }
+
+        /// <summary>
+        /// Deletes several packages behind one UAC prompt. Every name is
+        /// validated before anything runs, so one bad entry cannot leave half a
+        /// batch deleted.
+        /// </summary>
+        public static List<ActionResult> DeleteDrivers(List<string> oemInfs, bool uninstall,
+            bool force, bool reboot)
+        {
+            if (oemInfs == null || oemInfs.Count == 0)
+                throw new ActionException("no driver packages given");
+            List<string> names = new List<string>();
+            foreach (string raw in oemInfs) names.Add(ValidateOemInf(raw));
+
+            List<string[]> commands = new List<string[]>();
+            foreach (string name in names) commands.Add(DeleteArgs(name, uninstall, force, reboot));
+
+            List<ActionResult> results = DispatchMany(commands);
+            for (int i = 0; i < results.Count && i < names.Count; i++) results[i].DriverName = names[i];
+            return results;
         }
 
         public static ActionResult ExportDriver(string oemInf, string targetDir)

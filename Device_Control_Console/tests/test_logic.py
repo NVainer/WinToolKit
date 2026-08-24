@@ -297,5 +297,68 @@ class TestRelaunchCommand(unittest.TestCase):
             sys.argv[0] = real
 
 
+class TestElevatedBatch(unittest.TestCase):
+    """A batch of pnputil calls must come back as one result per call.
+
+    Deleting 60 packages used to mean 60 UAC prompts; they now run from one
+    script, so the shared output file has to be split back up correctly.
+    """
+
+    def setUp(self):
+        if sys.platform != "win32":
+            self.skipTest("actions module is Windows-only")
+        from dcc import actions
+        self.actions = actions
+
+    def test_each_command_gets_its_own_exit_code(self):
+        commands = [["/delete-driver", "oem1.inf"], ["/delete-driver", "oem2.inf"]]
+        text = "deleted oem1\n__DCC_ITEM__0:0\nfailed oem2\n__DCC_ITEM__1:5\n"
+        results = self.actions._parse_batch_output(text, commands)
+        self.assertEqual([r["returncode"] for r in results], [0, 5])
+        self.assertEqual([r["ok"] for r in results], [True, False])
+
+    def test_output_is_attributed_to_the_right_command(self):
+        commands = [["/delete-driver", "oem1.inf"], ["/delete-driver", "oem2.inf"]]
+        text = "first output\n__DCC_ITEM__0:0\nsecond output\n__DCC_ITEM__1:0\n"
+        results = self.actions._parse_batch_output(text, commands)
+        self.assertIn("first output", results[0]["output"])
+        self.assertNotIn("second output", results[0]["output"])
+        self.assertIn("second output", results[1]["output"])
+
+    def test_reboot_code_counts_as_success(self):
+        results = self.actions._parse_batch_output(
+            "__DCC_ITEM__0:3010\n", [["/delete-driver", "oem1.inf"]])
+        self.assertTrue(results[0]["ok"])
+        self.assertTrue(results[0]["reboot_required"])
+
+    def test_missing_marker_means_it_never_ran(self):
+        commands = [["/delete-driver", "oem1.inf"], ["/delete-driver", "oem2.inf"]]
+        results = self.actions._parse_batch_output("ran\n__DCC_ITEM__0:0\n", commands)
+        self.assertTrue(results[0]["ok"])
+        self.assertEqual(results[1]["returncode"], -1)
+        self.assertFalse(results[1]["ok"])
+
+    def test_script_quotes_every_argument(self):
+        commands = [["/delete-driver", "oem1.inf", "/uninstall"]]
+        script = self.actions._write_batch_script(commands, r"C:\Temp\out.txt")
+        try:
+            with open(script, encoding="ascii") as fh:
+                body = fh.read()
+            self.assertIn('"/delete-driver" "oem1.inf" "/uninstall"', body)
+            self.assertIn("__DCC_ITEM__0:%ERRORLEVEL%", body)
+            self.assertTrue(body.startswith("@echo off"))
+        finally:
+            os.remove(script)
+
+    def test_one_bad_name_aborts_the_whole_batch(self):
+        # Nothing may be deleted when any name in the batch fails validation.
+        with self.assertRaises(self.actions.ActionError):
+            self.actions.delete_drivers(["oem1.inf", "usb.inf"])
+
+    def test_empty_batch_is_refused(self):
+        with self.assertRaises(self.actions.ActionError):
+            self.actions.delete_drivers([])
+
+
 if __name__ == "__main__":
     unittest.main()

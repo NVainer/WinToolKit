@@ -1334,10 +1334,34 @@ async function confirmDeleteDriver(names) {
       <p class="note warn">Deleting a driver package cannot be undone. Export it first if you might need it back.</p>`,
   });
   if (!opts) return;
-  for (const name of names) {
-    await runAction({ verb: "delete-driver", driver_name: name, ...opts }, `Delete ${name}`);
+
+  // One request for the whole batch: the server runs them behind a single UAC
+  // prompt instead of one prompt (and one toast) per package.
+  const busy = toast(`Deleting ${names.length} package(s)…`,
+    many ? "Approve the UAC prompt once — the whole batch runs together." : "");
+  let res;
+  try {
+    res = await post("/api/action", { verb: "delete-driver", driver_names: names, ...opts });
+  } catch (e) {
+    busy.remove();
+    toast("Delete failed", e.message, "err");
+    return;
   }
+  busy.remove();
+
+  const failed = (res.results || []).filter((r) => !r.ok);
+  const kind = res.ok ? "ok" : failed.length === names.length ? "err" : "warn";
+  const headline = res.ok
+    ? `Deleted ${res.succeeded} package(s)${res.reboot_required ? " — reboot required" : ""}`
+    : `${res.succeeded} deleted, ${res.failed} failed`;
+  toast(headline, (res.results || [])
+    .map((r) => `${r.driver_name}  exit ${r.returncode}` +
+      (r.ok ? "" : `\n    ${(r.output || "").split("\n").slice(0, 2).join(" ").trim()}`))
+    .join("\n"), kind);
+
   state.checked.clear();
+  state.lastChecked = null;
+  await reload(true);
 }
 
 /* ------------------------------------------------------------ elevation */

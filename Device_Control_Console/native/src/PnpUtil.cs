@@ -55,6 +55,8 @@ namespace DeviceControlConsole
         public bool RebootRequired;
         public bool Elevated;
         public string Output = "";
+        /// <summary>Set for batch deletions so the UI can name each result.</summary>
+        public string DriverName = "";
 
         public Dictionary<string, object> ToMap()
         {
@@ -65,6 +67,7 @@ namespace DeviceControlConsole
             m["reboot_required"] = RebootRequired;
             m["elevated"] = Elevated;
             m["output"] = Output;
+            if (DriverName.Length > 0) m["driver_name"] = DriverName;
             return m;
         }
     }

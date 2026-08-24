@@ -164,8 +164,12 @@ def api_action(payload: dict) -> dict:
     known = set(snap.device_index)
     try:
         if verb == "delete-driver":
-            result = actions.delete_driver(
-                payload.get("driver_name", ""),
+            names = payload.get("driver_names")
+            if not names:
+                single = payload.get("driver_name", "")
+                names = [single] if single else []
+            result = actions.delete_drivers(
+                list(names),
                 uninstall=bool(payload.get("uninstall")),
                 force=bool(payload.get("force")),
                 reboot=bool(payload.get("reboot")),

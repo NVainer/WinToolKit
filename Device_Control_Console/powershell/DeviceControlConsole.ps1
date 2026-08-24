@@ -1111,40 +1111,112 @@ function Assert-InstanceId {
     return $trimmed
 }
 
-function Invoke-PnpAction {
-    param([string[]]$Arguments)
-    $result = @{ command = "pnputil $($Arguments -join ' ')"; returncode = -1
-                 ok = $false; reboot_required = $false; elevated = $true; output = '' }
+function New-PnpBatchScript {
+    <#
+        Writes a .cmd that runs each pnputil call and records its own exit code.
+
+        Handing the whole pipeline to `cmd /c` as one argument does not survive
+        cmd's quote-stripping rule -- a string that starts with a quote and
+        holds several more comes back as "The filename, directory name, or
+        volume label syntax is incorrect". A script file has no such rule, and
+        it lets a batch run behind a single UAC prompt rather than one prompt
+        per package.
+    #>
+    param([object[]]$Commands, [string]$OutPath)
+    $script = Join-Path ([System.IO.Path]::GetTempPath()) ("dcc_run_" + [guid]::NewGuid().ToString('N') + ".cmd")
+    $lines = New-Object System.Collections.ArrayList
+    $null = $lines.Add('@echo off')
+    for ($i = 0; $i -lt $Commands.Count; $i++) {
+        $quoted = (@($Commands[$i]) | ForEach-Object { '"' + ($_ -replace '"', '""') + '"' }) -join ' '
+        $null = $lines.Add('echo.>> "' + $OutPath + '"')
+        $null = $lines.Add('"' + $script:PnpUtilPath + '" ' + $quoted + ' >> "' + $OutPath + '" 2>&1')
+        # %ERRORLEVEL% expands as each line is read, so this catches the call above it.
+        $null = $lines.Add('echo __DCC_ITEM__' + $i + ':%ERRORLEVEL%>> "' + $OutPath + '"')
+    }
+    Set-Content -LiteralPath $script -Value ($lines -join "`r`n") -Encoding ASCII
+    return $script
+}
+
+function Split-PnpBatchOutput {
+    param([string]$Text, [object[]]$Commands)
+    $results = New-Object System.Collections.ArrayList
+    $marks = [regex]::Matches($Text, '__DCC_ITEM__(\d+):(-?\d+)')
+    $codes = @{}
+    $bodies = @{}
+    $cursor = 0
+    foreach ($m in $marks) {
+        $index = [int]$m.Groups[1].Value
+        $codes[$index] = [int]$m.Groups[2].Value
+        $bodies[$index] = $Text.Substring($cursor, $m.Index - $cursor)
+        $cursor = $m.Index + $m.Length
+    }
+    for ($i = 0; $i -lt $Commands.Count; $i++) {
+        $code = if ($codes.ContainsKey($i)) { $codes[$i] } else { -1 }
+        $body = if ($bodies.ContainsKey($i)) { $bodies[$i].Trim() } else { '' }
+        if (-not $body) { $body = if ($code -eq -1) { 'did not run' } else { '(no output)' } }
+        $null = $results.Add(@{
+            command = "pnputil $(@($Commands[$i]) -join ' ')"
+            returncode = $code
+            ok = ($code -eq 0 -or $code -eq 3010)
+            reboot_required = ($code -eq 3010)
+            elevated = $true
+            output = $body
+        })
+    }
+    return $results
+}
+
+function Invoke-PnpActionBatch {
+    <#  Runs every command, elevating once for the whole batch when needed.  #>
+    param([object[]]$Commands)
+    if (-not $Commands -or $Commands.Count -eq 0) { return @() }
+
     if (Test-Elevated) {
-        $out = & $script:PnpUtilPath @Arguments 2>&1 | Out-String
-        $result.returncode = $LASTEXITCODE
-        $result.output = $out.Trim()
-    } else {
-        # ShellExecute is required for the runas verb and cannot redirect, so an
-        # elevated cmd.exe writes to a file this process reads back.
-        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("dcc_elev_" + [guid]::NewGuid().ToString('N') + ".txt")
-        $quoted = ($Arguments | ForEach-Object { '"' + ($_ -replace '"', '""') + '"' }) -join ' '
-        $inner = '/c "' + $script:PnpUtilPath + '" ' + $quoted + ' > "' + $tmp + '" 2>&1 & echo __DCC_EXIT__%ERRORLEVEL% >> "' + $tmp + '"'
-        try {
-            $p = Start-Process -FilePath 'cmd.exe' -ArgumentList $inner -Verb RunAs `
-                    -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
-            $text = ''
-            if (Test-Path -LiteralPath $tmp) { $text = Get-Content -LiteralPath $tmp -Raw }
-            if ($text -match '__DCC_EXIT__(-?\d+)') {
-                $result.returncode = [int]$Matches[1]
-                $text = $text.Substring(0, $text.IndexOf('__DCC_EXIT__')).TrimEnd()
-            }
-            $result.output = if ($text.Trim()) { $text.Trim() } else { '(no output)' }
-        } catch {
-            $result.output = 'Elevation was cancelled.'
-            $result.returncode = 1223
-        } finally {
-            if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+        $results = New-Object System.Collections.ArrayList
+        foreach ($cmd in $Commands) {
+            $out = & $script:PnpUtilPath @cmd 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            $null = $results.Add(@{
+                command = "pnputil $(@($cmd) -join ' ')"
+                returncode = $code
+                ok = ($code -eq 0 -or $code -eq 3010)
+                reboot_required = ($code -eq 3010)
+                elevated = $true
+                output = $(if ($out.Trim()) { $out.Trim() } else { '(no output)' })
+            })
+        }
+        return $results
+    }
+
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("dcc_elev_" + [guid]::NewGuid().ToString('N') + ".txt")
+    Set-Content -LiteralPath $tmp -Value '' -NoNewline
+    $scriptPath = New-PnpBatchScript -Commands $Commands -OutPath $tmp
+    try {
+        Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', "`"$scriptPath`"") -Verb RunAs `
+            -WindowStyle Hidden -Wait -ErrorAction Stop | Out-Null
+        $text = ''
+        if (Test-Path -LiteralPath $tmp) { $text = Get-Content -LiteralPath $tmp -Raw }
+        if (-not $text -or $text -notmatch '__DCC_ITEM__') {
+            # Nothing ran at all: almost always a declined UAC prompt.
+            return @($Commands | ForEach-Object {
+                @{ command = "pnputil $(@($_) -join ' ')"; returncode = 1223; ok = $false
+                   reboot_required = $false; elevated = $true; output = 'Elevation was cancelled.' } })
+        }
+        return Split-PnpBatchOutput -Text $text -Commands $Commands
+    } catch {
+        return @($Commands | ForEach-Object {
+            @{ command = "pnputil $(@($_) -join ' ')"; returncode = 1223; ok = $false
+               reboot_required = $false; elevated = $true; output = 'Elevation was cancelled.' } })
+    } finally {
+        foreach ($f in @($tmp, $scriptPath)) {
+            if ($f -and (Test-Path -LiteralPath $f)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
         }
     }
-    $result.ok = ($result.returncode -eq 0 -or $result.returncode -eq 3010)
-    $result.reboot_required = ($result.returncode -eq 3010)
-    return $result
+}
+
+function Invoke-PnpAction {
+    param([string[]]$Arguments)
+    return (Invoke-PnpActionBatch -Commands @(, $Arguments))[0]
 }
 
 function Invoke-DeviceAction {
@@ -1461,12 +1533,35 @@ function Invoke-ApiRoute {
                     $flag = { param($k) if ($payload.ContainsKey($k)) { [bool]$payload[$k] } else { $false } }
                     switch ($verb) {
                         'delete-driver' {
-                            $name = Assert-OemInf (& $get 'driver_name')
-                            $a = @('/delete-driver', $name)
-                            if (& $flag 'uninstall') { $a += '/uninstall' }
-                            if (& $flag 'force') { $a += '/force' }
-                            if (& $flag 'reboot') { $a += '/reboot' }
-                            $r = Invoke-PnpAction -Arguments $a
+                            $wanted = @()
+                            if ($payload.ContainsKey('driver_names') -and $payload['driver_names']) {
+                                $wanted = @($payload['driver_names'])
+                            } elseif (& $get 'driver_name') {
+                                $wanted = @((& $get 'driver_name'))
+                            }
+                            if ($wanted.Count -eq 0) { throw 'no driver packages given' }
+                            # Validate every name first: one bad entry must not
+                            # leave half a batch deleted.
+                            $names = @($wanted | ForEach-Object { Assert-OemInf $_ })
+                            $cmds = @($names | ForEach-Object {
+                                $a = @('/delete-driver', $_)
+                                if (& $flag 'uninstall') { $a += '/uninstall' }
+                                if (& $flag 'force') { $a += '/force' }
+                                if (& $flag 'reboot') { $a += '/reboot' }
+                                , $a
+                            })
+                            $batch = @(Invoke-PnpActionBatch -Commands $cmds)
+                            for ($i = 0; $i -lt $names.Count; $i++) { $batch[$i]['driver_name'] = $names[$i] }
+                            $okCount = @($batch | Where-Object { $_.ok }).Count
+                            $r = @{
+                                verb = 'delete-driver'; count = $names.Count
+                                succeeded = $okCount; failed = ($names.Count - $okCount)
+                                ok = ($okCount -eq $names.Count)
+                                reboot_required = (@($batch | Where-Object { $_.reboot_required }).Count -gt 0)
+                                elevated = $true; results = $batch
+                                command = "pnputil /delete-driver x$($names.Count)"
+                                output = (($batch | ForEach-Object { "$($_.driver_name): exit $($_.returncode)" }) -join "`n")
+                            }
                         }
                         'export-driver' {
                             $name = Assert-OemInf (& $get 'driver_name')

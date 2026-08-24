@@ -246,9 +246,15 @@ The **Cleanup** tab lists two things worth acting on:
   also in the store. Grouped by the package family ID, so `oem12.inf` and
   `oem48.inf` are recognised as two versions of `amdi2c.inf`.
 
-Tick the packages, hit **Delete selected packages**, and choose whether to add
-`/uninstall` or `/force`. Export a package first if you might want it back:
-deleting from the driver store is not undoable.
+Tick the packages — the header checkbox selects everything currently filtered,
+and shift-click extends a range — then hit **Delete selected packages** and
+choose whether to add `/uninstall` or `/force`. The whole batch runs from one
+script behind **a single UAC prompt**, and you get one summary rather than one
+prompt and one toast per package. Every name is validated before anything runs,
+so a bad entry cannot leave half a batch deleted.
+
+Export a package first if you might want it back: deleting from the driver
+store is not undoable.
 
 A driver package that is genuinely in use will refuse to delete without
 `/uninstall` or `/force` — that refusal comes from Windows and is deliberate.
