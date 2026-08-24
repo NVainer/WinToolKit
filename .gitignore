@@ -23,3 +23,5 @@ desktop.ini
 
 # native build output
 native/bin/
+powershell/bundle/
+powershell/hwids/

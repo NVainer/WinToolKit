@@ -70,23 +70,60 @@ in the field `pnputil` prints.
 - **Device tree.** The real parent/child tree with resolved names.
 - **Export.** Devices or driver store to CSV/JSON, from the UI or the CLI.
 
-## Two builds
+## Three builds
 
-The same console ships two ways. Both serve the identical UI — `dcc/web/` is
-shared, not duplicated — and produce identical data.
+The same console ships three ways. All serve the identical UI — `dcc/web/` is
+shared, not duplicated — and report the same numbers.
 
-| | Python build | Native build |
-| --- | --- | --- |
-| Needs | Python 3.10+ | nothing — .NET Framework 4.x is in-box on Win10/11 |
-| Ships as | the repo | one ~190 KB `DeviceControlConsole.exe` |
-| Start with | `run.cmd` | double-click the exe |
-| Full scan | ~1.8 s | ~1.7 s (device enumeration alone: 0.4 s vs 1.8 s) |
-| Good for | hacking on it | locked-down machines, USB sticks, PCs without Python |
+| | Python | PowerShell | Native |
+| --- | --- | --- | --- |
+| Needs | Python 3.10+ | nothing (in-box PowerShell) | nothing (in-box .NET Framework) |
+| Ships as | the repo | one `.ps1` + `web/` | one ~190 KB `.exe` |
+| Start with | `run.cmd` | `powershell\run.cmd` | `native\run.cmd` |
+| Full scan | ~1.8 s | ~3.5 s | ~1.7 s |
+| Unsigned binary? | no | **no** | **yes** |
+| Blocked by Smart App Control / WDAC | no | no | **usually yes** |
 
-Neither needs third-party packages: the Python build is standard library only,
-and the native build is compiled by the C# compiler that ships inside Windows.
+None needs third-party packages.
 
-### Building the native exe
+### Which one to use
+
+**On a locked-down machine, use the PowerShell build.** Smart App Control and
+enterprise WDAC/AppLocker policies block unsigned executables, and the native
+build is one. Verified on a machine with Smart App Control on: the `.exe` is
+refused from every location (CodeIntegrity event 3077), while the PowerShell
+build runs normally because everything it goes through — `powershell.exe`, the
+`PnpDevice` module, `pnputil.exe` — is already Microsoft-signed, and it compiles
+nothing.
+
+The native build is still the fastest and the tidiest to hand around, so it
+remains the right choice wherever unsigned binaries are permitted, or once it
+has been signed with a certificate your organisation allowlists.
+
+### PowerShell build
+
+```bash
+powershell\run.cmd
+```
+
+`-ExecutionPolicy Bypass` is applied to that one process; no machine or user
+policy is changed. To make a portable copy for a USB stick:
+
+```bash
+powershell\DeviceControlConsole.ps1 bundle
+```
+
+One limitation worth knowing: the CIM method behind the rich device properties
+only answers for devices that are **present**, so disconnected devices show up
+in the list without parent/child links, and appear as roots in the tree. Their
+full properties — including the bus-reported name — are fetched the moment you
+open one, and the resolved name is recomputed then. Names still resolve
+correctly in the list either way, because a disconnected composite device is
+named from its interface children, which the fast path does return.
+
+### Native exe
+
+### Native exe
 
 ```bash
 native\build.cmd
