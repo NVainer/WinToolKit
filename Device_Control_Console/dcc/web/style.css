@@ -400,6 +400,20 @@ tbody tr.ghost td:not(.mono) { color: var(--fg-dim); }
 .gnode.sel rect { stroke: var(--accent); stroke-width: 2.4px; }
 .gnode.hit rect { stroke: var(--warn); stroke-width: 2.4px; }
 .gnode.ghost rect { stroke-dasharray: 4 3; }
+
+/* Radial nodes are a dot plus an outward-running label, not a box, so the
+   states above have nothing to paint -- they key off the dot instead. */
+.gnode.radial rect { stroke: none !important; }
+.gnode.radial .gdot { stroke-width: 1.5px; transition: r .08s ease; }
+.gnode.radial:hover .gdot { r: 7; stroke: var(--accent); stroke-width: 2.5px; }
+.gnode.radial:hover .gname { fill: var(--accent); font-weight: 600; }
+.gnode.radial.sel .gdot { r: 7.5; stroke: var(--accent); stroke-width: 3px; }
+.gnode.radial.sel .gname { fill: var(--accent); font-weight: 650; }
+.gnode.radial.hit .gdot { r: 7; stroke: var(--warn); stroke-width: 3px; }
+.gnode.radial.hit .gname { fill: var(--warn); font-weight: 600; }
+.gnode.radial.ghost .gdot { stroke-dasharray: 2.5 2; }
+.gnode.radial.ghost .gname { fill: var(--fg-dim); }
+.gnode.radial.drv .gname { fill: var(--accent); }
 .gnode .gexp { font: 10px var(--mono); fill: var(--fg-faint); }
 .gedge { fill: none; stroke: var(--line); stroke-width: 1.3px; }
 .gedge.drv { stroke: var(--accent); stroke-dasharray: 5 4; opacity: .75; }

@@ -110,7 +110,8 @@ const ALL_COLUMNS = {
     { key: "present", label: "Present", w: 88, cell: (d) => (d.present ? "yes" : "no") },
   ],
   drivers: [
-    { key: "_check", label: "", w: 32, def: true, nosort: true,
+    { key: "_check", label: "", w: 34, def: true, nosort: true,
+      header: () => `<input type="checkbox" data-check-all title="Select all / none (filtered rows)">`,
       cell: (d) => `<input type="checkbox" data-check="${esc(d.driver_name)}"${state.checked.has(d.driver_name) ? " checked" : ""}>` },
     { key: "driver_name", label: "Published name", w: 122, cls: "mono", def: true },
     { key: "original_name", label: "Original name", w: 210, cls: "mono", def: true },
@@ -132,7 +133,8 @@ const ALL_COLUMNS = {
       cell: (d) => esc((d.device_names || []).join("; ")) },
   ],
   cleanup: [
-    { key: "_check", label: "", w: 32, def: true, nosort: true,
+    { key: "_check", label: "", w: 34, def: true, nosort: true,
+      header: () => `<input type="checkbox" data-check-all title="Select all / none (filtered rows)">`,
       cell: (r) => (r.driver_name ? `<input type="checkbox" data-check="${esc(r.driver_name)}"${state.checked.has(r.driver_name) ? " checked" : ""}>` : "") },
     { key: "kind", label: "Finding", w: 180, def: true,
       cell: (r) => `<span class="pill ${r.severity}">${esc(r.kind)}</span>` },
@@ -149,6 +151,7 @@ const colValue = (col, row) => (col.get ? col.get(row) : row[col.key]);
 const GROUPS = {
   devices: [
     { key: "", label: "No grouping" },
+    { key: "resolved_name", label: "Resolved device" },
     { key: "device_type", label: "Type" },
     { key: "class_name", label: "Class" },
     { key: "status", label: "Status" },
@@ -204,6 +207,7 @@ const DEFAULT_PREFS = () => ({
     .map(([v, cols]) => [v, cols.filter((c) => c.def).map((c) => c.key)])),
   widths: { devices: {}, drivers: {}, cleanup: {} },
   groupBy: { devices: "", drivers: "", cleanup: "" },
+  graphLayout: "radial",
   theme: null,
 });
 
@@ -223,6 +227,9 @@ function loadPrefs() {
       }
     }
     if (saved.theme) base.theme = saved.theme;
+    if (saved.graphLayout === "tree" || saved.graphLayout === "radial") {
+      base.graphLayout = saved.graphLayout;
+    }
   } catch { /* corrupt prefs are not worth a crash */ }
   return base;
 }
@@ -235,6 +242,7 @@ const state = {
   groups: [],
   selectedId: null,
   checked: new Set(),
+  lastChecked: null,
   collapsedGroups: { devices: new Set(), drivers: new Set(), cleanup: new Set() },
   sort: {
     devices: { key: "resolved_name", dir: 1 },
@@ -425,8 +433,9 @@ function renderTable() {
   $("#gridHead").innerHTML = `<tr>${cols.map((c) => {
     const active = s.key === c.key;
     const arrow = active ? `<span class="arrow">${s.dir > 0 ? "\u25b2" : "\u25bc"}</span>` : "";
+    const label = c.header ? c.header() : esc(c.label);
     return `<th${c.nosort ? ' class="nosort"' : ` data-sort="${c.key}"`} title="${esc(c.label)}">` +
-      `${esc(c.label)}${arrow}<span class="col-grip" data-grip="${esc(c.key)}"></span></th>`;
+      `${label}${arrow}<span class="col-grip" data-grip="${esc(c.key)}"></span></th>`;
   }).join("")}</tr>`;
 
   const collapsed = state.collapsedGroups[state.view];
@@ -669,8 +678,14 @@ function renderTree() {
 }
 
 /* ----------------------------------------------------------- tree (graph) */
-const graph = { root: "", depth: 3, showDrivers: false, scale: 1, tx: 40, ty: 40, laidOut: false };
+const graph = { root: "", depth: 3, showDrivers: false, layout: "radial",
+                scale: 1, tx: 40, ty: 40, laidOut: false };
 const NODE_W = 244, NODE_H = 38, COL_GAP = 300, ROW_GAP = 48;
+// Radial packs far more nodes per unit area, so its boxes carry the name only
+// and drop the instance-id line that the tree layout has room for.
+const RADIAL_W = 172, RADIAL_H = 26;
+const boxW = () => (graph.layout === "tree" ? NODE_W : RADIAL_W);
+const boxH = () => (graph.layout === "tree" ? NODE_H : RADIAL_H);
 
 function buildGraphModel() {
   const { byId, kids, roots } = childMap();
@@ -701,22 +716,13 @@ function buildGraphModel() {
 
   const tops = startIds.map((id) => visit(id, 0)).filter(Boolean);
 
-  let cursor = 0;
-  const place = (n) => {
-    n.x = n.depth * COL_GAP;
-    if (!n.children.length) { n.y = cursor; cursor += ROW_GAP; }
-    else {
-      n.children.forEach(place);
-      n.y = (n.children[0].y + n.children[n.children.length - 1].y) / 2;
-    }
-  };
-  tops.forEach((t) => { place(t); cursor += ROW_GAP * 0.5; });
+  if (graph.layout === "tree") placeTree(tops);
+  else placeRadial(tops, nodes);
 
   const edges = [];
   for (const n of nodes) for (const c of n.children) edges.push({ from: n, to: c, kind: "child" });
 
   if (graph.showDrivers) {
-    const maxDepth = Math.max(0, ...nodes.map((n) => n.depth));
     const packs = new Map();
     for (const n of nodes) {
       const names = [n.dev.driver_name, ...(n.dev.extension_drivers || [])].filter(Boolean);
@@ -725,31 +731,157 @@ function buildGraphModel() {
         packs.get(name).users.push(n);
       }
     }
-    let py = 0;
-    for (const p of [...packs.values()].sort((a, b) => cmp(a.name, b.name))) {
-      p.depth = maxDepth + 1;
-      p.x = p.depth * COL_GAP;
-      p.y = p.users.reduce((s, u) => s + u.y, 0) / p.users.length;
-      if (p.y < py) p.y = py;
-      py = p.y + ROW_GAP;
-      nodes.push(p);
-      for (const u of p.users) edges.push({ from: u, to: p, kind: "driver" });
+    const sorted = [...packs.values()].sort((a, b) => cmp(a.name, b.name));
+    if (graph.layout === "tree") {
+      const maxDepth = Math.max(0, ...nodes.map((n) => n.depth));
+      let py = 0;
+      for (const p of sorted) {
+        p.depth = maxDepth + 1;
+        p.x = p.depth * COL_GAP;
+        p.y = p.users.reduce((s, u) => s + u.y, 0) / p.users.length;
+        if (p.y < py) p.y = py;
+        py = p.y + ROW_GAP;
+        nodes.push(p);
+        for (const u of p.users) edges.push({ from: u, to: p, kind: "driver" });
+      }
+    } else {
+      // Packages ride an outer ring, each sitting at the average angle of the
+      // devices that use it so its spokes stay short.
+      const outer = Math.max(0, ...nodes.map((n) => n.r || 0)) + 260;
+      const step = (Math.PI * 2) / Math.max(sorted.length, 1);
+      sorted.forEach((p, i) => {
+        // Sit each package at the mean angle of the devices using it, unless
+        // there are so many that they would pile up -- then space them evenly.
+        const mean = meanAngle(p.users.map((u) => u.angle || 0));
+        const a = sorted.length > 24 ? -Math.PI / 2 + i * step : mean;
+        p.angle = a;
+        p.r = outer;
+        p.cx = Math.cos(a) * outer;
+        p.cy = Math.sin(a) * outer;
+        p.x = p.cx;
+        p.y = p.cy;
+        nodes.push(p);
+        for (const u of p.users) edges.push({ from: u, to: p, kind: "driver" });
+      });
     }
   }
   return { nodes, edges, truncated };
 }
 
+/** Angles are circular, so averaging them needs vectors, not arithmetic. */
+function meanAngle(angles) {
+  if (!angles.length) return 0;
+  let sx = 0, sy = 0;
+  for (const a of angles) { sx += Math.cos(a); sy += Math.sin(a); }
+  return Math.atan2(sy, sx);
+}
+
+const leafCount = (n) => (n.children.length
+  ? n.children.reduce((s, c) => s + leafCount(c), 0)
+  : 1);
+
+/** Left-to-right tidy tree: one row per leaf. Tall, but exact. */
+function placeTree(tops) {
+  let cursor = 0;
+  const place = (n) => {
+    n.x = n.depth * COL_GAP;
+    if (!n.children.length) { n.y = cursor; cursor += ROW_GAP; }
+    else {
+      n.children.forEach(place);
+      n.y = (n.children[0].y + n.children[n.children.length - 1].y) / 2;
+    }
+    n.cx = n.x + NODE_W / 2;
+    n.cy = n.y + NODE_H / 2;
+  };
+  tops.forEach((t) => { place(t); cursor += ROW_GAP * 0.5; });
+}
+
+/**
+ * Radial tree: depth becomes distance from the centre and siblings fan out
+ * around it, so the drawing grows outward in two dimensions instead of down one
+ * very long column.
+ *
+ * Three passes, because a ring's radius depends on the angles it has to hold.
+ * Sizing a ring by how many nodes sit on it is not enough: wedges are handed
+ * out in proportion to subtree size, so a level's tightest wedge — not its
+ * average — decides whether boxes collide. Radius therefore comes from that
+ * tightest wedge, capped so one hairline wedge cannot fling the ring to
+ * infinity.
+ */
+function placeRadial(tops, nodes) {
+  // Leaves are spaced evenly around the circle and every parent sits at the
+  // mean angle of its children. Because each node is drawn rotated to face
+  // outward, it only needs its own *height* of arc rather than its width --
+  // which is what keeps the whole drawing small enough to read at once.
+  const leaves = [];
+  const collect = (n) => (n.children.length ? n.children.forEach(collect) : leaves.push(n));
+  tops.forEach(collect);
+  const count = Math.max(leaves.length, 1);
+
+  let maxDepth = 0;
+  for (const n of nodes) if (n.depth > maxDepth) maxDepth = n.depth;
+
+  const outer = Math.max(200, (count * (RADIAL_H + 6)) / (Math.PI * 2));
+  const ring = outer / Math.max(maxDepth, 1);
+
+  leaves.forEach((n, i) => { n.angle = (i / count) * Math.PI * 2 - Math.PI / 2; });
+  const meanOfChildren = (n) => {
+    if (!n.children.length) return n.angle;
+    const angles = n.children.map(meanOfChildren);
+    n.angle = angles.reduce((a, b) => a + b, 0) / angles.length;
+    return n.angle;
+  };
+  tops.forEach(meanOfChildren);
+
+  // Even spacing only holds for the leaves. A parent takes the mean angle of
+  // its children, so two parents whose subtrees are adjacent can end up almost
+  // on top of each other on an inner ring. Push each ring out until its
+  // closest pair has room, capped so one pathological pair cannot blow up the
+  // whole drawing.
+  const byDepth = new Map();
+  for (const n of nodes) {
+    if (!byDepth.has(n.depth)) byDepth.set(n.depth, []);
+    byDepth.get(n.depth).push(n);
+  }
+  const clearance = RADIAL_H + 6;
+  const radii = [0];
+  for (let d = 1; d <= maxDepth; d++) {
+    const angles = (byDepth.get(d) || []).map((n) => n.angle).sort((a, b) => a - b);
+    let tightest = Math.PI * 2;
+    for (let i = 1; i < angles.length; i++) {
+      const gap = angles[i] - angles[i - 1];
+      if (gap > 1e-6 && gap < tightest) tightest = gap;
+    }
+    const wanted = clearance / tightest;
+    radii[d] = Math.max(radii[d - 1] + clearance * 1.6,
+                        Math.min(Math.max(d * ring, wanted), outer * 2.5));
+  }
+
+  for (const n of nodes) {
+    n.r = radii[n.depth] || 0;
+    n.cx = Math.cos(n.angle) * n.r;
+    n.cy = Math.sin(n.angle) * n.r;
+    n.x = n.cx;
+    n.y = n.cy;
+  }
+  return { outer, ring };
+}
+
 function fitGraph(nodes) {
   const wrap = $("#graphWrap");
   if (!wrap || !nodes.length) return;
+  // In radial mode x/y are the node's centre and its label runs outward, so the
+  // real extent is wider than the plotted points.
+  const pad = graph.layout === "tree" ? 0 : 230;
   const xs = nodes.map((n) => n.x), ys = nodes.map((n) => n.y);
-  const minX = Math.min(...xs), maxX = Math.max(...xs) + NODE_W;
-  const minY = Math.min(...ys), maxY = Math.max(...ys) + NODE_H;
+  const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + boxW() + pad;
+  const minY = Math.min(...ys) - pad / 3, maxY = Math.max(...ys) + boxH() + pad / 3;
   const w = wrap.clientWidth || 1200, h = wrap.clientHeight || 700;
   const scale = Math.min(w / (maxX - minX + 90), h / (maxY - minY + 90), 1.4);
   // Fitting a tall tree to the window can shrink it past legibility; below
   // this it is better to start at the top-left and let the user pan.
-  graph.scale = Math.min(Math.max(scale, 0.42), 1.4);
+  const floor = graph.layout === "tree" ? 0.42 : 0.2;
+  graph.scale = Math.min(Math.max(scale, floor), 1.4);
   graph.tx = 45 - minX * graph.scale;
   graph.ty = 45 - minY * graph.scale;
   applyGraphTransform();
@@ -775,19 +907,77 @@ function renderGraph() {
   const nameFont = '12px "Segoe UI", system-ui, sans-serif';
   const subFont = '10px ui-monospace, Consolas, monospace';
 
+  const polar = (a, r) => `${Math.cos(a) * r},${Math.sin(a) * r}`;
   const edgePath = (e) => {
-    const x1 = e.from.x + NODE_W, y1 = e.from.y + NODE_H / 2;
-    const x2 = e.to.x, y2 = e.to.y + NODE_H / 2;
-    const mid = (x1 + x2) / 2;
-    return `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`;
+    if (graph.layout === "tree") {
+      const x1 = e.from.x + NODE_W, y1 = e.from.y + NODE_H / 2;
+      const x2 = e.to.x, y2 = e.to.y + NODE_H / 2;
+      const mid = (x1 + x2) / 2;
+      return `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`;
+    }
+    // Radial link: leave the parent along its own angle, sweep round to the
+    // child's angle at the halfway radius, then run out to the child. Follows
+    // the tree's shape instead of cutting across the middle of the diagram.
+    const r1 = e.from.r || 0, r2 = e.to.r || 0;
+    const a1 = e.from.angle || 0, a2 = e.to.angle || 0;
+    const mid = (r1 + r2) / 2;
+    return `M${polar(a1, r1)} C${polar(a1, mid)} ${polar(a2, mid)} ${polar(a2, r2)}`;
+  };
+
+  const W = boxW(), H = boxH(), compact = graph.layout !== "tree";
+
+  /** Radial nodes are rotated to face outward, so text runs along the spoke. */
+  const radialSvg = (n) => {
+    const deg = (n.angle * 180) / Math.PI;
+    const flip = Math.cos(n.angle) < 0;
+    const isDriver = n.kind === "driver";
+    const d = n.dev;
+    const label = isDriver ? n.name : (d.resolved_name || d.description);
+    const text = clipText(label, 210, nameFont);
+    const width = textWidth(text, nameFont) + 14;
+
+    let cls = "gnode", fill = "var(--accent-soft)", stroke = "var(--accent)";
+    if (!isDriver) {
+      const hit = q && (d.search_blob || "").includes(q);
+      cls = ["gnode", d.instance_id === state.selectedId ? "sel" : "",
+        hit ? "hit" : "", d.present ? "" : "ghost"].filter(Boolean).join(" ");
+      fill = d.present ? "var(--accent)" : "var(--bg-elev2)";
+      stroke = d.problem_code ? "var(--danger)" : d.present ? "var(--accent)" : "var(--ghost)";
+    }
+    const attr = isDriver
+      ? `class="gnode drv radial" data-driver="${esc(n.name)}"`
+      : `class="${cls} radial" data-id="${esc(d.instance_id)}"`;
+    const title = isDriver
+      ? `${esc(n.name)}\n${n.users.length} device(s)`
+      : `${esc(label)}\n${esc(d.device_type || "")}\n${esc(d.instance_id)}`;
+    const badge = (!isDriver && n.hidden > 0)
+      ? `<g class="gexp-hit" data-expand="${esc(d.instance_id)}"
+             transform="translate(${flip ? -(width + 16) : width + 16},0)">
+           <circle r="9" fill="var(--bg-elev2)" stroke="var(--line)"></circle>
+           <text class="gexp" y="3.5" text-anchor="middle">${n.hidden}</text>
+         </g>` : "";
+
+    return `<g ${attr} transform="rotate(${deg.toFixed(2)}) translate(${n.r.toFixed(1)},0)">
+      <title>${title}</title>
+      <circle class="gdot" r="4.5" fill="${fill}" stroke="${stroke}"></circle>
+      <g transform="${flip ? "rotate(180)" : ""}">
+        <rect x="${flip ? -width - 9 : 9}" y="-9" width="${width}" height="18" rx="4"
+              fill="var(--bg-elev)" fill-opacity="0.82" stroke="none"></rect>
+        <text class="gname" x="${flip ? -13 : 13}" dy="0.34em"
+              text-anchor="${flip ? "end" : "start"}">${esc(text)}</text>
+        ${badge}
+      </g>
+    </g>`;
   };
 
   const nodeSvg = (n) => {
+    if (graph.layout !== "tree") return radialSvg(n);
     if (n.kind === "driver") {
+      const dw = compact ? W : W - 60;
       return `<g class="gnode drv" data-driver="${esc(n.name)}" transform="translate(${n.x},${n.y})">
-        <rect width="${NODE_W - 60}" height="${NODE_H}" rx="9" fill="var(--accent-soft)" stroke="var(--accent)"></rect>
-        <text class="gname" x="12" y="16">${esc(n.name)}</text>
-        <text class="gsub" x="12" y="29">${n.users.length} device(s)</text>
+        <rect width="${dw}" height="${H}" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"></rect>
+        <text class="gname" x="10" y="${compact ? 17 : 16}">${esc(clipText(n.name, dw - 16, nameFont))}</text>
+        ${compact ? "" : `<text class="gsub" x="12" y="29">${n.users.length} device(s)</text>`}
       </g>`;
     }
     const d = n.dev;
@@ -796,16 +986,19 @@ function renderGraph() {
       hit ? "hit" : "", d.present ? "" : "ghost"].filter(Boolean).join(" ");
     const fill = d.present ? "var(--bg-elev)" : "var(--bg-elev2)";
     const stroke = d.problem_code ? "var(--danger)" : d.present ? "var(--line)" : "var(--ghost)";
+    const badgeW = compact ? 26 : 30;
     const badge = n.hidden > 0
       ? `<g class="gexp-hit" data-expand="${esc(d.instance_id)}">
-           <rect x="${NODE_W - 34}" y="${NODE_H / 2 - 9}" width="30" height="18" rx="9"
+           <rect x="${W - badgeW - 4}" y="${H / 2 - 8}" width="${badgeW}" height="16" rx="8"
                  fill="var(--bg-elev2)" stroke="var(--line)"></rect>
-           <text class="gexp" x="${NODE_W - 19}" y="${NODE_H / 2 + 4}" text-anchor="middle">+${n.hidden}</text>
+           <text class="gexp" x="${W - badgeW / 2 - 4}" y="${H / 2 + 4}" text-anchor="middle">+${n.hidden}</text>
          </g>` : "";
-    return `<g class="${cls}" data-id="${esc(d.instance_id)}" transform="translate(${n.x},${n.y})">
-      <rect width="${NODE_W}" height="${NODE_H}" rx="9" fill="${fill}" stroke="${stroke}"></rect>
-      <text class="gname" x="12" y="16">${esc(clipText(d.resolved_name || d.description, NODE_W - 56, nameFont))}</text>
-      <text class="gsub" x="12" y="29">${esc(clipText(`${d.device_type || ""} · ${d.instance_id}`, NODE_W - 56, subFont))}</text>
+    const room = W - (n.hidden > 0 ? badgeW + 18 : 16);
+    return `<g class="${cls}" data-id="${esc(d.instance_id)}" transform="translate(${n.x},${n.y})"
+      ><title>${esc(d.resolved_name || d.description)}\n${esc(d.device_type || "")}\n${esc(d.instance_id)}</title>
+      <rect width="${W}" height="${H}" rx="8" fill="${fill}" stroke="${stroke}"></rect>
+      <text class="gname" x="10" y="${compact ? 17 : 16}">${esc(clipText(d.resolved_name || d.description, room, nameFont))}</text>
+      ${compact ? "" : `<text class="gsub" x="12" y="29">${esc(clipText(`${d.device_type || ""} · ${d.instance_id}`, room, subFont))}</text>`}
       ${badge}
     </g>`;
   };
@@ -818,6 +1011,12 @@ function renderGraph() {
             <option value="">Whole machine</option>
             ${busOptions.map((d) => `<option value="${esc(d.instance_id)}"${graph.root === d.instance_id ? " selected" : ""}>${esc(d.resolved_name || d.description)}</option>`).join("")}
             ${state.selectedId && byId.has(state.selectedId) ? `<option value="${esc(state.selectedId)}"${graph.root === state.selectedId ? " selected" : ""}>Selected: ${esc(byId.get(state.selectedId).resolved_name)}</option>` : ""}
+          </select>
+        </label>
+        <label>Layout
+          <select id="graphLayout">
+            <option value="radial"${graph.layout === "radial" ? " selected" : ""}>Radial</option>
+            <option value="tree"${graph.layout === "tree" ? " selected" : ""}>Tree (tall)</option>
           </select>
         </label>
         <label>Depth <input type="number" id="graphDepth" min="1" max="8" value="${graph.depth}" style="width:52px"></label>
@@ -900,6 +1099,13 @@ function bindGraphInteractions(model) {
 
   $("#graphRoot").addEventListener("change", (e) => {
     graph.root = e.target.value; graph.laidOut = false; renderGraph();
+  });
+  $("#graphLayout").addEventListener("change", (e) => {
+    graph.layout = e.target.value;
+    state.prefs.graphLayout = graph.layout;
+    savePrefs();
+    graph.laidOut = false;
+    renderGraph();
   });
   $("#graphDepth").addEventListener("change", (e) => {
     graph.depth = Math.min(8, Math.max(1, parseInt(e.target.value, 10) || 3));
@@ -1172,13 +1378,36 @@ async function openAsAdmin() {
 }
 
 /* ----------------------------------------------------------------- wiring */
+/** Names of the checkable rows currently visible, in display order. */
+function checkableNames() {
+  const out = [];
+  for (const g of state.groups) {
+    if (state.prefs.groupBy[state.view] && state.collapsedGroups[state.view].has(g.key)) continue;
+    for (const r of g.rows) {
+      const name = r.driver_name;
+      if (name) out.push(name);
+    }
+  }
+  return out;
+}
+
 function updateSelectionUi() {
   const btn = $("#btnBulkDelete");
   const info = $("#selInfo");
   if (!btn || !info) return;
   const n = state.checked.size;
   btn.hidden = n === 0;
-  info.textContent = n ? `${n} package(s) selected` : "";
+  const names = checkableNames();
+  const onScreen = names.filter((x) => state.checked.has(x)).length;
+  info.textContent = n
+    ? `${n} package(s) selected${onScreen !== n ? ` (${onScreen} shown)` : ""}`
+    : "";
+
+  const all = $("input[data-check-all]");
+  if (all) {
+    all.checked = names.length > 0 && onScreen === names.length;
+    all.indeterminate = onScreen > 0 && onScreen < names.length;
+  }
 }
 
 function setView(view) {
@@ -1302,11 +1531,40 @@ function bind() {
       return;
     }
 
+    const all = e.target.closest("input[data-check-all]");
+    if (all) {
+      e.stopPropagation();
+      const names = checkableNames();
+      // Anything left unticked means "select the rest" rather than "clear".
+      const everyOn = names.length > 0 && names.every((n) => state.checked.has(n));
+      names.forEach((n) => (everyOn ? state.checked.delete(n) : state.checked.add(n)));
+      renderTable();
+      return;
+    }
+
     const box = e.target.closest("input[data-check]");
     if (box) {
       e.stopPropagation();
       const name = box.dataset.check;
+      const names = checkableNames();
+      if (e.shiftKey && state.lastChecked && state.lastChecked !== name) {
+        // Shift-click extends from the last box touched, so a long run of
+        // orphaned packages can be selected without 60 clicks.
+        const from = names.indexOf(state.lastChecked);
+        const to = names.indexOf(name);
+        if (from >= 0 && to >= 0) {
+          const [lo, hi] = from < to ? [from, to] : [to, from];
+          const turnOn = box.checked;
+          for (let i = lo; i <= hi; i++) {
+            if (turnOn) state.checked.add(names[i]); else state.checked.delete(names[i]);
+          }
+          state.lastChecked = name;
+          renderTable();
+          return;
+        }
+      }
       if (box.checked) state.checked.add(name); else state.checked.delete(name);
+      state.lastChecked = name;
       updateSelectionUi();
       return;
     }
@@ -1458,6 +1716,7 @@ function bind() {
 
 (function init() {
   if (state.prefs.theme) document.documentElement.dataset.theme = state.prefs.theme;
+  graph.layout = state.prefs.graphLayout;
   bind();
   reload(false);
 })();
