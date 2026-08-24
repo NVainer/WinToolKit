@@ -3,7 +3,7 @@
 Windows administration tools that answer questions the built-in utilities
 answer badly. Each lives in its own folder and runs independently.
 
-## [Device Control Console](Device_Conrol_Console/)
+## [Device Control Console](Device_Control_Console/)
 
 A console for the Windows driver store and device tree — the things `pnputil`
 can only show you as flat text.
