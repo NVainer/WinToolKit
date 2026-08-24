@@ -172,6 +172,10 @@ body {
   background: var(--bg); color: var(--fg); border: 1px solid var(--line);
   border-radius: 6px; padding: 3px 6px; font: 11.5px var(--sans); max-width: 190px;
 }
+.inline-lbl {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--fg-faint); margin-left: 4px;
+}
 
 /* ---------- layout ---------- */
 main { flex: 1 1 auto; display: flex; min-height: 0; }
@@ -179,7 +183,11 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
 .table-scroll { flex: 1 1 auto; overflow: auto; position: relative; }
 
 /* ---------- grid ---------- */
-table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12.5px; }
+table {
+  border-collapse: separate; border-spacing: 0; font-size: 12.5px;
+  table-layout: fixed;   /* required for the colgroup widths the resizer sets */
+  width: max-content; min-width: 100%;
+}
 
 thead th {
   position: sticky; top: 0; z-index: 5;
@@ -187,10 +195,39 @@ thead th {
   text-align: left; font-weight: 600; white-space: nowrap;
   padding: 7px 10px; border-bottom: 1px solid var(--line);
   cursor: pointer; user-select: none;
+  overflow: hidden; text-overflow: ellipsis;
 }
 thead th:hover { color: var(--fg); }
 thead th .arrow { color: var(--accent); font-size: 10px; margin-left: 3px; }
 thead th.nosort { cursor: default; }
+
+/* drag the right edge of a header to resize, double-click it to auto-fit */
+thead th { position: sticky; }
+.col-grip {
+  position: absolute; top: 0; right: 0; width: 7px; height: 100%;
+  cursor: col-resize; user-select: none;
+}
+.col-grip::after {
+  content: ""; position: absolute; right: 3px; top: 6px; bottom: 6px;
+  width: 1px; background: var(--line);
+}
+.col-grip:hover::after, .col-grip.dragging::after { background: var(--accent); width: 2px; }
+body.resizing { cursor: col-resize; user-select: none; }
+
+/* ---------- grouping ---------- */
+tr.group td {
+  background: var(--bg-elev2); border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--line-soft);
+  font-weight: 600; color: var(--fg); cursor: pointer;
+  position: sticky; left: 0;
+}
+tr.group:hover td { background: var(--bg-elev); }
+tr.group .twisty { display: inline-block; width: 14px; color: var(--fg-faint); font-size: 10px; }
+tr.group .gcount {
+  font: 10.5px var(--mono); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: 0 7px; color: var(--fg-faint); margin-left: 8px;
+}
+tr.group .gmeta { color: var(--fg-faint); font-weight: 400; margin-left: 10px; font-size: 11.5px; }
 
 tbody td {
   padding: 5px 10px; border-bottom: 1px solid var(--line-soft);
@@ -327,6 +364,69 @@ tbody tr.ghost td:not(.mono) { color: var(--fg-dim); }
 .tree .node:hover { background: var(--bg-elev); }
 .tree .twisty { width: 12px; color: var(--fg-faint); font-size: 10px; user-select: none; }
 .tree .iid { font: 10.5px var(--mono); color: var(--fg-faint); }
+
+/* ---------- graph view ---------- */
+.graph-wrap { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: var(--bg); }
+.graph-wrap svg { width: 100%; height: 100%; display: block; cursor: grab; }
+.graph-wrap svg.panning { cursor: grabbing; }
+
+.graph-toolbar {
+  position: absolute; top: 10px; left: 10px; z-index: 6;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
+  border: 1px solid var(--line); border-radius: 9px; padding: 6px 8px;
+  backdrop-filter: blur(6px);
+}
+.graph-toolbar label { font-size: 11.5px; color: var(--fg-faint); display: flex; align-items: center; gap: 5px; }
+.graph-toolbar select, .graph-toolbar input[type=number] {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 6px; font: 11.5px var(--sans); max-width: 230px;
+}
+.graph-legend {
+  position: absolute; right: 10px; bottom: 10px; z-index: 6;
+  background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
+  border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px;
+  font-size: 11px; color: var(--fg-dim); display: flex; flex-direction: column; gap: 4px;
+}
+.graph-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+  margin-right: 6px; vertical-align: -1px; }
+
+.gnode rect { stroke-width: 1.2px; }
+.gnode text { pointer-events: none; }
+.gnode .gname { font: 12px var(--sans); fill: var(--fg); }
+.gnode .gsub { font: 10px var(--mono); fill: var(--fg-faint); }
+.gnode { cursor: pointer; }
+.gnode:hover rect { stroke: var(--accent); stroke-width: 2px; }
+.gnode.sel rect { stroke: var(--accent); stroke-width: 2.4px; }
+.gnode.hit rect { stroke: var(--warn); stroke-width: 2.4px; }
+.gnode.ghost rect { stroke-dasharray: 4 3; }
+.gnode .gexp { font: 10px var(--mono); fill: var(--fg-faint); }
+.gedge { fill: none; stroke: var(--line); stroke-width: 1.3px; }
+.gedge.drv { stroke: var(--accent); stroke-dasharray: 5 4; opacity: .75; }
+.gedge.hot { stroke: var(--accent); stroke-width: 2px; }
+
+.graph-note {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  background: var(--bg-elev); border: 1px solid var(--line); border-radius: 8px;
+  padding: 5px 12px; font-size: 11.5px; color: var(--fg-dim); z-index: 6;
+}
+
+/* ---------- column picker ---------- */
+.col-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; max-height: 46vh; overflow: auto; }
+.col-picker label {
+  display: flex; align-items: center; gap: 8px; margin: 0;
+  padding: 4px 7px; border-radius: 6px; font-size: 12px;
+}
+.col-picker label:hover { background: var(--bg-elev2); }
+.col-picker label.locked { opacity: .55; }
+
+.btn.shield::before {
+  content: ""; display: inline-block; width: 11px; height: 12px; margin-right: 6px;
+  vertical-align: -2px; background: currentColor;
+  clip-path: polygon(50% 0, 100% 22%, 100% 60%, 50% 100%, 0 60%, 0 22%);
+}
+.btn.shield { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.btn.shield:hover { background: color-mix(in srgb, var(--warn) 14%, transparent); }
 
 input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
 ::-webkit-scrollbar { width: 11px; height: 11px; }

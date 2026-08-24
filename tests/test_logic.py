@@ -271,5 +271,31 @@ class TestHwids(unittest.TestCase):
         self.assertIn("SteelSeries", vendor)
 
 
+class TestRelaunchCommand(unittest.TestCase):
+    """The elevated child must be told the port and where to read its token."""
+
+    def setUp(self):
+        if sys.platform != "win32":
+            self.skipTest("server module is Windows-only")
+        from dcc import server
+        self.server = server
+
+    def test_command_carries_port_and_token_file(self):
+        args = self.server._relaunch_command(8777, r'C:\Temp\dcc_token.txt')
+        self.assertIn("serve", args)
+        self.assertIn("--no-browser", args)
+        self.assertEqual(args[args.index("--port") + 1], "8777")
+        self.assertEqual(args[args.index("--token-file") + 1], r'C:\Temp\dcc_token.txt')
+
+    def test_falls_back_to_module_form(self):
+        real = sys.argv[0]
+        try:
+            sys.argv[0] = "definitely-not-a-file"
+            args = self.server._relaunch_command(9000, "t.txt")
+            self.assertEqual(args[:2], ["-m", "dcc"])
+        finally:
+            sys.argv[0] = real
+
+
 if __name__ == "__main__":
     unittest.main()

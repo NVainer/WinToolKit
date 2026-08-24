@@ -26,10 +26,14 @@
 
   <div class="topbar-actions">
     <span class="badge" id="elevBadge" title="Administrator status">…</span>
+    <button id="btnAdmin" class="btn shield" hidden title="Restart the console elevated so actions stop prompting">Open as Admin</button>
     <button id="btnRefresh" class="btn" title="Re-read devices and driver store (F5)">Refresh</button>
     <div class="menu">
       <button class="btn" id="btnMore">More ▾</button>
       <div class="menu-panel" id="morePanel" hidden>
+        <button data-act="columns">Choose columns…</button>
+        <button data-act="reset-columns">Reset columns and widths</button>
+        <hr>
         <button data-act="export-devices-csv">Export devices (CSV)</button>
         <button data-act="export-devices-json">Export devices (JSON)</button>
         <button data-act="export-drivers-csv">Export driver store (CSV)</button>
@@ -58,6 +62,7 @@
   <section class="table-pane" id="tablePane">
     <div class="table-scroll">
       <table id="grid">
+        <colgroup id="gridCols"></colgroup>
         <thead id="gridHead"></thead>
         <tbody id="gridBody"></tbody>
       </table>
@@ -65,9 +70,12 @@
     </div>
     <footer class="table-foot">
       <span id="rowInfo">—</span>
+      <button class="btn small" id="btnExpandAll" hidden>Expand all</button>
+      <button class="btn small" id="btnCollapseAll" hidden>Collapse all</button>
       <span class="spacer"></span>
       <span id="selInfo"></span>
       <button class="btn danger small" id="btnBulkDelete" hidden>Delete selected packages…</button>
+      <button class="btn small" id="btnColumns" title="Choose columns">Columns…</button>
     </footer>
   </section>
 

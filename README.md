@@ -52,6 +52,16 @@ in the field `pnputil` prints.
   package to see every device using it.
 - **Search and sort.** One search box over every field (names, instance IDs,
   VID/PID, INF names, class, vendor, service, status); click any column to sort.
+- **Columns you control.** 30 device columns and 18 driver columns to pick from
+  (**Columns…**), drag a header edge to resize, double-click that edge to fit the
+  content. The layout is remembered per view.
+- **Group by.** Type, class, status, manufacturer, vendor, driver package, bus,
+  name confidence, connected/disconnected — or **physical device**, which uses
+  the Windows container ID to gather every function of one piece of hardware
+  under a single heading. Groups collapse individually or all at once.
+- **Graph mode.** The device tree as a node-link diagram — pan, zoom, expand a
+  branch from its `+n` badge, double-click to re-root, and switch on driver
+  packages to see which devices share which `oem*.inf`.
 - **Cleanup view.** Orphaned packages nothing uses, superseded older copies of a
   package, devices with problem codes, and leftover disconnected nodes.
 - **Full control.** Delete, export and add driver packages; enable, disable,
@@ -74,11 +84,16 @@ run.cmd
 That starts the console on `http://127.0.0.1:8777` and opens a browser. Write
 actions raise a UAC prompt when you use them.
 
-To skip the per-action prompts, start it elevated instead:
+To skip the per-action prompts, either start it elevated:
 
 ```bash
 run-admin.cmd
 ```
+
+…or click **Open as Admin** in the header. That restarts the console elevated on
+the same address and token, so the page you are looking at keeps working — no
+new tab, no re-navigating. Decline the UAC prompt and the original console
+simply takes its port back and carries on unelevated.
 
 Other options:
 

@@ -13,7 +13,12 @@ import json
 import mimetypes
 import os
 import secrets
+import socket
+import subprocess
+import sys
+import tempfile
 import threading
+import time
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +30,12 @@ ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 
 CACHE = model.SnapshotCache()
 TOKEN = secrets.token_urlsafe(24)
+
+#: Set when the page asks to hand over to an elevated instance of itself.
+_RESTART_ELEVATED = threading.Event()
+#: Lets the page tell "UAC declined" apart from "the new instance is still
+#: coming up" -- both look like a dead port from the browser's side.
+_ELEVATION = {"attempted": False, "declined": False}
 
 
 class ApiError(Exception):
@@ -327,6 +338,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(api_driver(query))
                 if path == "/api/hwids":
                     return self._json(hwids.status())
+                if path == "/api/ping":
+                    return self._json({
+                        "ok": True,
+                        "elevated": actions.is_elevated(),
+                        "pid": os.getpid(),
+                        "elevation_declined": _ELEVATION["declined"],
+                    })
                 if path == "/api/export":
                     body, ctype, filename = api_export(query)
                     return self._send(
@@ -364,6 +382,14 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/refresh":
                 CACHE.invalidate()
                 return self._json({"ok": True})
+            if parsed.path == "/api/relaunch-admin":
+                if actions.is_elevated():
+                    return self._json({"ok": True, "already": True})
+                _ELEVATION["attempted"] = True
+                _ELEVATION["declined"] = False
+                _RESTART_ELEVATED.set()
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return self._json({"ok": True, "already": False})
             if parsed.path == "/api/shutdown":
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return self._json({"ok": True})
@@ -393,11 +419,90 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, body, ctype)
 
 
+class Server(ThreadingHTTPServer):
+    #: On Windows SO_REUSEADDR lets a second socket steal a live port, which
+    #: would silently split traffic between the old and new instance.
+    allow_reuse_address = False
+    daemon_threads = True
+    verbose = False
+
+
+def _bind(host: str, port: int, attempts: int = 40, delay: float = 0.4) -> Server:
+    """Bind, retrying while a previous instance finishes releasing the port."""
+    last: OSError | None = None
+    for _ in range(attempts):
+        try:
+            return Server((host, port), Handler)
+        except OSError as exc:
+            last = exc
+            time.sleep(delay)
+    raise SystemExit(f"could not bind {host}:{port} -- {last}")
+
+
+def _port_answers(host: str, port: int, timeout: float = 0.4) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _wait_for_port(host: str, port: int, timeout: float = 40.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _port_answers(host, port):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def _relaunch_command(port: int, token_file: str) -> list[str]:
+    """Rebuild this program's own command line for the elevated child."""
+    script = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    head = [script] if script.lower().endswith(".py") and os.path.isfile(script) else ["-m", "dcc"]
+    return [*head, "serve", "--port", str(port), "--no-browser", "--token-file", token_file]
+
+
+def _spawn_elevated(host: str, port: int, token: str) -> bool:
+    """Start an elevated copy of the console on the same port and token.
+
+    The token travels through a short-lived file rather than the command line,
+    so it never shows up in the process list.
+    """
+    fd, token_file = tempfile.mkstemp(prefix="dcc_tok_", suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token)
+    args = _relaunch_command(port, token_file)
+    quoted = ",".join("'" + a.replace("'", "''") + "'" for a in args)
+    ps = (
+        f"try {{ Start-Process -FilePath '{sys.executable}' "
+        f"-ArgumentList {quoted} -Verb RunAs -WorkingDirectory "
+        f"'{os.path.abspath(os.getcwd())}' -WindowStyle Hidden; exit 0 }} "
+        "catch { exit 1 }"
+    )
+    try:
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, text=True, timeout=180,
+            creationflags=pnputil.CREATE_NO_WINDOW,
+        )
+        started = proc.returncode == 0
+    except Exception:
+        started = False
+    if not started:
+        try:
+            os.remove(token_file)
+        except OSError:
+            pass
+    return started
+
+
 def serve(host: str = "127.0.0.1", port: int = 8777, open_browser: bool = True,
-          verbose: bool = False, prewarm: bool = True) -> None:
-    httpd = ThreadingHTTPServer((host, port), Handler)
-    httpd.verbose = verbose  # type: ignore[attr-defined]
-    url = f"http://{host}:{httpd.server_address[1]}/?token={TOKEN}"
+          verbose: bool = False, prewarm: bool = True, token: str | None = None) -> None:
+    global TOKEN
+    if token:
+        TOKEN = token
+    url = f"http://{host}:{port}/?token={TOKEN}"
     print("Device Control Console")
     print(f"  URL         : {url}")
     print(f"  Elevated    : {'yes' if actions.is_elevated() else 'no (write actions will prompt for UAC)'}")
@@ -406,9 +511,26 @@ def serve(host: str = "127.0.0.1", port: int = 8777, open_browser: bool = True,
         threading.Thread(target=lambda: CACHE.get(refresh=True), daemon=True).start()
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\nstopping...")
-    finally:
+
+    while True:
+        httpd = _bind(host, port)
+        httpd.verbose = verbose
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nstopping...")
+            httpd.server_close()
+            return
         httpd.server_close()
+
+        if not _RESTART_ELEVATED.is_set():
+            return
+        _RESTART_ELEVATED.clear()
+        print("  handing over to an elevated instance...", flush=True)
+        if _spawn_elevated(host, port, TOKEN) and _wait_for_port(host, port):
+            print("  elevated instance is serving; this one is done.", flush=True)
+            return
+        # UAC was declined, or the child never came up: take the port back so
+        # the page the user is looking at keeps working.
+        _ELEVATION["declined"] = True
+        print("  elevation did not complete; continuing as standard user.", flush=True)

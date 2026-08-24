@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 
 from . import actions, hwids, model, server
@@ -89,7 +90,21 @@ def _match(row: dict, needle: str) -> bool:
 # commands
 # --------------------------------------------------------------------------
 def cmd_serve(args) -> int:
-    server.serve(port=args.port, open_browser=not args.no_browser, verbose=args.verbose)
+    token = None
+    if args.token_file:
+        # Written by the instance that asked for elevation; read once, then gone.
+        try:
+            with open(args.token_file, "r", encoding="utf-8") as fh:
+                token = fh.read().strip() or None
+        except OSError:
+            token = None
+        finally:
+            try:
+                os.remove(args.token_file)
+            except OSError:
+                pass
+    server.serve(port=args.port, open_browser=not args.no_browser,
+                 verbose=args.verbose, token=token)
     return 0
 
 
@@ -282,6 +297,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=8777)
     s.add_argument("--no-browser", action="store_true")
     s.add_argument("--verbose", action="store_true")
+    s.add_argument("--token-file", default="",
+                   help="read the session token from this file, then delete it "
+                        "(used when handing over to an elevated instance)")
     s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("devices", help="list devices with resolved names")
