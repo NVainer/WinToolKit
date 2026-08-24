@@ -75,8 +75,8 @@ function cmp(a, b) {
 /* ---------------------------------------------------------------- columns */
 const COLUMNS = {
   devices: [
-    { key: "device_type", label: "Type", width: "128px",
-      cell: (d) => `<span class="type-tag">${esc(d.type_icon || "?")}</span>${esc(d.device_type || "")}` },
+    { key: "device_type", label: "Type", width: "132px",
+      cell: (d) => `<span title="${esc(d.type_from || "")}">${esc(d.device_type || "")}</span>` },
     { key: "resolved_name", label: "Resolved device",
       cell: (d) => `${esc(d.resolved_name || "")}<span class="conf ${d.resolved_confidence}" title="Resolved from: ${esc(d.resolved_from || "")}">${d.resolved_confidence === "high" ? "\u25cf" : d.resolved_confidence === "medium" ? "\u25d0" : "\u25cb"}</span>` },
     { key: "instance_id", label: "Instance ID", cls: "mono" },

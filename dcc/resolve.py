@@ -279,6 +279,8 @@ class Resolver:
     # -- public -----------------------------------------------------------
     def resolve_name(self, iid: str) -> dict:
         dev = self.devices.get(iid, {})
+        # 1. the node names itself: friendly name, bus-reported string, or a
+        #    description that did not come from a Windows-generic INF.
         direct = self._vendor_named(iid)
         if direct:
             name, source = direct
