@@ -302,6 +302,8 @@ CLASS_TO_TYPE = {
     "infrared": "Infrared",
     "smartcardfilter": "Smart card filter",
     "memory": "Memory technology",
+    "mtd": "Memory technology",
+    "computeaccelerator": "Compute accelerator",
     "1394": "IEEE 1394",
     "pcmcia": "PCMCIA",
     "fdc": "Floppy controller",

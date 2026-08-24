@@ -20,3 +20,6 @@ pci.ids
 *.swp
 Thumbs.db
 desktop.ini
+
+# native build output
+native/bin/

@@ -70,10 +70,43 @@ in the field `pnputil` prints.
 - **Device tree.** The real parent/child tree with resolved names.
 - **Export.** Devices or driver store to CSV/JSON, from the UI or the CLI.
 
+## Two builds
+
+The same console ships two ways. Both serve the identical UI — `dcc/web/` is
+shared, not duplicated — and produce identical data.
+
+| | Python build | Native build |
+| --- | --- | --- |
+| Needs | Python 3.10+ | nothing — .NET Framework 4.x is in-box on Win10/11 |
+| Ships as | the repo | one ~190 KB `DeviceControlConsole.exe` |
+| Start with | `run.cmd` | double-click the exe |
+| Full scan | ~1.8 s | ~1.7 s (device enumeration alone: 0.4 s vs 1.8 s) |
+| Good for | hacking on it | locked-down machines, USB sticks, PCs without Python |
+
+Neither needs third-party packages: the Python build is standard library only,
+and the native build is compiled by the C# compiler that ships inside Windows.
+
+### Building the native exe
+
+```bash
+native\build.cmd
+```
+
+No SDK, no NuGet, no downloads. It uses
+`%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`, embeds the web UI
+as resources, and writes `native\bin\DeviceControlConsole.exe`. Copy that one
+file anywhere — it needs nothing beside it.
+
+It runs `asInvoker`, so it never demands a UAC prompt just to look at devices,
+and it serves over a plain loopback socket rather than `HttpListener` —
+http.sys would otherwise require an admin-registered URL reservation, making
+the console admin-only for no reason. The `usb.ids` / `pci.ids` cache is kept
+next to the exe when that folder is writable (so a USB copy carries it), and
+falls back to `%LOCALAPPDATA%` when it is not.
+
 ## Requirements
 
-Windows 10 21H2 / Windows 11 or newer (needs `pnputil /format xml`) and
-Python 3.10+. **No third-party packages** — standard library only.
+Windows 10 21H2 / Windows 11 or newer — both builds need `pnputil /format xml`.
 
 ## Run
 
