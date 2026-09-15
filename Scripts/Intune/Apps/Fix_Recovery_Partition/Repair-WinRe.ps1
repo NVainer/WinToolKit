@@ -37,7 +37,7 @@ if (-not (Test-WinRE)) {
 }
 
 # 4. BitLocker back on + recovery key to Entra (always - never leave C: clear)
-manage-bde -on C: -rp
+manage-bde -on C: -rp -s
 $KeyId = ((Get-BitLockerVolume -MountPoint 'C:').KeyProtector | Where-Object { $_.KeyProtectorType -eq 'RecoveryPassword' }).KeyProtectorId
 manage-bde -protectors -aadbackup C: -id $KeyId
 
