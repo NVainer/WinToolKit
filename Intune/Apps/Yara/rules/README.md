@@ -1,128 +1,205 @@
 # Windows 11 Endpoint YARA Ruleset
 
 **Author:** Nati
-**Version:** 2026-05-24 (bound-pattern hardening pass)
-**Target:** Intune-managed Windows 11 endpoints (cloud-joined, Defender + MDE primary EDR)
-**Total:** 134 detection rules across 9 category files + 2 global private filters
-**License / scope:** internal use; rules tuned to this environment's trusted baseline (Intune Management Extension, MDE live response, Windows Update, certutil/bitsadmin used legitimately by IME).
+**Version:** v3 — 2026-10-14 (rebuilt for a regular-user fleet)
+**Target:** Intune-managed, Entra-joined Windows 11 endpoints. Regular users: not developers, not local admins. Defender / MDE is the primary EDR, Microsoft Sentinel the SIEM.
+**Total:** 49 detection rules in 7 category files + 2 global private filters.
+**License / scope:** internal use.
 
 ---
 
-## 1. What changed in 2026-05-24
+## 1. What changed in v3
 
-The previous design used `any of ($foo, $bar)` and bare standalone-keyword conditions. On a real Windows 11 fleet that produced **2552 hits per scan**, of which **0 were real attacks**. The 24.05 rewrite enforces one rule:
+v2 had 134 rules and still produced noise from binary datastores. v3 starts from the question "what can a file scanner find on a regular user's laptop that MDE does not already own?" and keeps only that.
 
-> **Every detection rule must require a bound ATTACK SHAPE — verb + argument + value combined inside a single proximity-bounded regex (or AND of two such regexes). No standalone keyword conditions. No `or $tool_name_alone` branches.**
+Removed, and why:
 
-The first pass (2552 → 231 hits) fixed the worst single rule (`OBF_HIGH_PS_Backtick_Broken_IEX`, which used `` `? `` making backticks optional). The second pass (231 → 18) added a global content-based suppressor for the scanner's own artifacts. The third pass (18 → 7) addressed Defender ATP scripts, vcredist installer logs, ExplorerStartupLog.etl, and SettingsCache.txt. The fourth pass (this one) tightened the remaining ESE-database / store DB FPs by adding a second global filter, then rebuilt all 134 rules with bound patterns.
-
-End state on the reference Windows 11 endpoint:
-- `reverse.txt` decoy (canonical PS TCPClient reverse shell) → fires `RS_HIGH_PS_TCPClient_Stream_IEX_Loop`, exactly one rule
-- HP TechPulse JSON, Microsoft Search index, Edge WebCache, Windows Store DB, NTUSER.DAT, Office Excel JS bundles, Defender ATP DataCollection .ps1, vcredist installer logs, ExplorerStartupLog.etl, Microsoft Settings cache → **zero matches**
-
----
-
-## 2. The bound-pattern design
-
-### 2.1 What "bound" means
-
-A bound pattern is one regex that requires **two or more attack-shape elements to appear together in proximity**. The elements are typically (verb, argument, value) — for example:
-
-| Element type | Examples |
+| Removed | Reason |
 |---|---|
-| Verb | `New-Object`, `Invoke-WmiMethod`, `Add-MpPreference`, `reg save`, `certutil -urlcache`, `rundll32 ... MiniDump` |
-| Argument shape | `(literal IP, literal port)`, `-ma <pid>`, `-CollectionMethod All`, `-DisableRealtimeMonitoring $true` |
-| Value / target | `lsass(.exe)?`, `\\<host>\<share>\*.dll`, `HKLM\SAM`, `C:\Users\...\AppData\...`, `https://raw.githubusercontent.com/...` |
+| Refresh-token / ESTSAUTH "staged on disk" rule | Every MSAL.js web app (Teams, Outlook on the web, the Azure portal) stores `"accessToken":"eyJ..."` in Edge/Chrome LevelDB files in plain text. The rule fired on normal browser state. |
+| AiTM landing-page rule | Matched the real `login.microsoftonline.com` page cached by the browser (branding strings + a `wss://` host). |
+| Device-code lure-page rule | `[A-Z0-9]{4}-[A-Z0-9]{4}` matches dates; the real `microsoft.com/devicelogin` page matched too. |
+| ISO / VHD container heuristic | `CD001` + a `.lnk` string anywhere in a 200 MB file matched every Windows ISO in Downloads. |
+| MSI CustomAction rule | Every vendor MSI has a VBScript custom action. |
+| Havoc and Brute Ratel string rules | Both implants hash API names and ship no stable plaintext; the strings were guesses. |
+| NTDS / DCSync / ntdsutil / GPP cpassword / PrintNightmare / SpoolFool / PetitPotam / RBCD / ADCS | Domain-controller era tooling with nothing to attack from a cloud-joined workstation. |
+| wmic rules, Follina, xwizard, ie4uinit, pcalua, cdb, tracker, msdt, WSL, hh.exe, CHM, XLL, PDF JavaScript | Gone from Windows 11 24H2 (wmic), patched for years, or too rare to earn a rule. |
+| Sysmon unload, COR_PROFILER, CLM escape, BITS jobs, GPO scripts, AppDomainManager, profile tampering | Not in use here / registry-only / noise. |
 
-A bound regex puts those together within a 200–500 char window:
+Added:
 
-```
-$bound = /<verb>[^\r\n]{0,200}<argument>[^\r\n]{0,200}<value>/i ascii wide
-```
+- Global skips for SQLite, EVTX, PST/OST and compressed prefetch on top of the ESE and registry-hive skips.
+- Registry hives are skipped **except** readable copies of SAM / SYSTEM / SECURITY, which are now detected (`CRED_HIGH_Registry_Hive_Copy_SAM_SYSTEM_SECURITY`).
+- `-EncodedCommand` payload inspection without decoding, via YARA's `wide base64` modifier.
+- Base64-encoded executables inside text/HTML/scripts (HTML smuggling, droppers with embedded binaries).
+- ClickFix lure pages and the pasted command, LSASS minidumps on disk, Kerberos ticket files.
+- NetSupport RAT, commodity .NET RATs, unsanctioned remote-access tools, tunnelling binaries, rclone, Discord/Telegram exfil channels.
+- Vulnerable drivers used by EDR killers, Defender-killer utilities, KMS activators, NirSoft password tools, admin/recon tooling on user endpoints.
 
-### 2.2 Why this kills FPs
+End state on the reference machine (a developer laptop, so noisier than a regular user's): every decoy in `tests\` fires exactly the intended rule, every benign control stays clean, our own `install.ps1`, `scan-*.ps1` and task XMLs do not fire.
 
-Loose conditions like `($verb and $value)` fire on any file that mentions the two elements *anywhere*. Windows Search index (`Windows.db`) contains every PowerShell cmdlet name as indexed text. .NET runtime DLLs export every `WebClient` / `Bypass` / `Base64` symbol as a method name. Office Excel JS bundles contain `cUrl` (a JS class) on one line and `https://raw.githubusercontent.com/...` (a webpack source-map URL) on another. None of those are attacks, but every one of them is two-keyword positive under the old design.
+---
 
-Bound patterns require the elements to be **structurally adjacent in the way a real attacker writes them**. `New-Object Net.Sockets.TCPClient('1.2.3.4',4444)` is a bound shape. `Net.Sockets.TCPClient` somewhere in a 200 MB MUI file is not.
+## 2. Design
 
-### 2.3 Three universal hardening clauses
+### 2.1 Three anchors per rule
 
-Every script/text-content rule applies these three gates in its `condition`:
+Every rule needs a **format anchor** (magic bytes, or a structural marker such as `<Task version=`), an **execution primitive** (a verb, API or tool name) and a **payload shape** (URL, encoded blob, user-writable path, hidden-window flag, credential store path). One of the three alone never fires.
 
 ```yara
 condition:
-    not uint16(0) == 0x5A4D and       // skip PE  (MZ header)
-    not uint32(0) == 0x464C457F and   // skip ELF (0x7F ELF header)
-    filesize < 5MB and                // typical PS payload cap
-    <bound regex(es)>
+    $lnk_magic at 0            // format
+    and 1 of ($h_*)            // script host
+    and 1 of ($p_*)            // payload shape
 ```
 
-PE skip excludes .NET DLLs, .exe, .mui, .tbres, .etl-with-PE-headers — these files contain symbol names like `WebClient`/`Bypass`/`AmsiScanBuffer` as exports, not as attacker invocations. Filesize cap keeps scans cheap and reflects that real obfuscated PS payloads are tiny.
+### 2.2 Text rules skip binaries
 
-Rules that **target binary content** intentionally omit the PE skip (XLL add-ins, CobaltStrike beacons, Mimikatz banner strings inside the .exe). These are flagged in each rule's comment.
+Every rule that looks for commands or script text starts with:
 
-### 2.4 Global private filters (`00_global_filters.yar`)
+```yara
+not uint16(0) == 0x5A4D and not uint32(0) == 0x464C457F   // not PE, not ELF
+and filesize < 10MB
+```
 
-YARA `global private rule` acts as an AND-precondition for every other rule in the namespace. Two of them suppress entire file classes that produce only noise:
+.NET DLLs export every `WebClient` / `AmsiScanBuffer` / `Bypass` symbol as a method name. Rules that *target* binaries (C2 implants, drivers, RATs) require `uint16(0) == 0x5A4D` instead.
 
-| Filter | Suppresses |
+### 2.3 Global private filters (`00_global_filters.yar`)
+
+A `global private rule` is an AND-precondition for every other rule. Two of them drop file classes that only ever contain indexed text and cached web content:
+
+| Filter | Drops |
 |---|---|
-| `SKIP_OWN_SCAN_ARTIFACTS` | `.yarc` magic at offset 0; scanner JSON schema (3-marker co-occurrence); explicit `__YARA_INTUNE_SELF_OUTPUT_v1__` marker. Kills self-detection when the scan JSON is emailed back to a scanned box and Outlook caches the attachment. |
-| `SKIP_BINARY_SYSTEM_DATASTORES` | ESE database / log (`uint32(4) == 0xEFCDAB89` — Windows.db, V01.log, store.db, WebCacheV01.dat); REGF registry hive (`uint32(0) == 0x66676572` — NTUSER.DAT, SOFTWARE, SYSTEM, SAM). These are kernel-managed binary stores; attackers modify them via APIs, not by writing raw bytes, so static byte scanning produces only indexed-text noise. |
+| `SKIP_OWN_SCAN_ARTIFACTS` | the compiled `.yarc` (magic `YARA`), our own scan JSON (three keys co-occur), anything carrying `__YARA_INTUNE_SELF_OUTPUT_v1__` |
+| `SKIP_SYSTEM_DATASTORES` | ESE (`Windows.db`, `WebCacheV01.dat`, `qmgr.db`), SQLite (browser History/Cookies/Login Data, Teams, ActivitiesCache), `.evtx`, `.pst/.ost`, compressed `.pf`, and `regf` hives **unless** the hive is a SAM/SYSTEM/SECURITY copy |
 
-Neither filter is path-based. An attacker dropping a malicious payload in `C:\ProgramData\HP\evil.ps1` is still scanned and matched — the global skips only file *types* whose binary structure inherently can't carry attacker-crafted detectable content.
+All checks are magic-byte based. Nothing is path based, so an attacker cannot hide a payload by choosing a folder.
 
-The scanner emits its own marker into every scan record:
+### 2.4 Encoded commands without decoding
 
-```powershell
-# scan-quick.ps1 / scan-full.ps1
-$SelfMarker = '__YARA_INTUNE_SELF_OUTPUT_v1__'
-$rec = [pscustomobject]@{
-    TimeGenerated = $nowIso
-    ...
-    SelfMarker    = $SelfMarker
-}
+`powershell -enc <b64>` encodes the UTF-16LE script. YARA's `wide base64` modifier produces exactly that encoding, in all three alignments:
+
+```yara
+$b_dls = "DownloadString" wide base64 base64wide
 ```
+
+`base64wide` additionally covers blobs stored as UTF-16 themselves (scheduled-task XML, LNK arguments). `PS_HIGH_EncodedCommand_Malicious_Payload` combines the `-e/-ec/-enc` flag with these markers; TCPClient, AMSI and Invoke-Mimikatz markers fire even without the flag.
+
+### 2.5 Tool names need a second element
+
+A tool name in a blog post must not fire. Tool rules bind the name to a tool-specific argument (`Rubeus … /user:`), a second family string (`AsyncRAT` + `get_SslClient`), a Go import path (`github.com/bishopfox/sliver`), or require a PE header.
 
 ---
 
 ## 3. Severity model
 
-| Severity | When it fires | Response |
+| Severity | Meaning | Response |
 |---|---|---|
-| `high` | High-confidence bound attack shape (TCPClient + literal IP+port + IEX loop, mimikatz + `sekurlsa::logonpasswords`, PrintNightmare RPC + UNC, etc.) | Immediate triage; isolate endpoint if user is non-admin or off-baseline |
-| `medium-high` | Bound shape with one looser element (e.g. PowerView 3-of-N functions + arg, but specific function set is dispersed) | Triage within 1 hour; correlate with MDE timeline |
-
-There is no `low` band. If you wouldn't look at a hit, the rule shouldn't be in the set.
+| `high` | Attack artifact or tool with no benign explanation on a regular user's device | Triage now; isolate via MDE if the user is non-admin and the file sits in a user-writable path |
+| `medium-high` | Attack shape with one looser element, or a tool that IT staff might legitimately own | Triage within the day; check path and publisher |
+| `medium` | Unwanted-but-not-malicious, or a format heuristic | Review in the weekly sweep; tune by path/tool name in KQL |
 
 ---
 
 ## 4. Rule inventory
 
-| # | File | Rules | Coverage |
-|---|------|------:|----------|
-| 00 | `00_global_filters.yar` | 2 globals | `SKIP_OWN_SCAN_ARTIFACTS`, `SKIP_BINARY_SYSTEM_DATASTORES` |
-| 01 | `01_reverse_shells_c2.yar` | 17 | PS TCPClient/NetworkStream reverse shells, PowerCat, download cradles, reflective Assembly.Load, P/Invoke shellcode, named-pipe C2, certutil/curl IEX cradle, WMI/DCOM lateral, .NET C# reverse-shell source, HTTP beacon loop, CobaltStrike / Sliver / Havoc / BruteRatel / Meterpreter / PoshC2-Empire stagers |
-| 02 | `02_lolbas_abuse.yar` | 18 | certutil/bitsadmin/mshta/regsvr32/rundll32/msbuild/installutil/wmic/cmstp/forfiles/hh/msdt/ie4uinit/xwizard/pcalua/mavinject/cdb/tracker/wsl/cscript-wscript — every one bound to abuse syntax + payload |
-| 03 | `03_amsi_etw_defender_bypass.yar` | 13 | AMSI patch (reflection, byte-patch, HWBP, CtxField), ETW patch, COR_PROFILER hijack, Script-block / module logging disable, Defender realtime disable, exclusion-of-user-writable-path, service-kill, Sysmon unload, LanguageMode escape, TamperProtection bypass |
-| 04 | `04_credential_access.yar` | 15 | procdump/comsvcs/MiniDumpWriteDump/sqldumper/WerFault/KProcessHacker LSASS dump, reg save SAM/SYSTEM/SECURITY, VSS shadow NTDS extract, Mimikatz module strings + PS wrapper, Rubeus kerberoast, SharpHound/BloodHound, LaZagne, browser cred DB + DPAPI, SharpDPAPI/DonPAPI, PS direct NT API LSASS read |
-| 05 | `05_persistence.yar` | 16 | Run/RunOnce, IFEO accessibility, IFEO SilentProcessExit, WMI event subscription, sc create suspicious binPath, Winlogon Userinit/Shell, AppInit_DLLs, LSA SSP, COM HKCU InprocServer32, Print Monitor, Scheduled Task with -enc/user-writable, Startup folder script drop, .NET AppDomainManager hijack, PS profile tampering, BITS job, GPO ScheduledTask/Scripts.ini |
-| 06 | `06_obfuscated_powershell.yar` | 14 | Stealth-flag stack + downloader, Invoke-Obfuscation format-op stack, [char] array reconstruction, backtick-broken IEX, env-var IEX, ScriptBlock.Create+Invoke, GZip/Deflate in-memory unpack, reflective Assembly.Load + b64, trusted-site download cradle, string-reverse + GetType, shellcode loader scaffold, AMSI token char-reassembly, XOR inline decode loop, FromBase64 inline IEX one-liner |
-| 07 | `07_initial_access.yar` | 13 | HTA WScript.Shell + payload, VBA AutoExec + payload, LNK + embedded cmdline, OneNote + FileDataStoreObject + script-suffix, SCT/WSC + regsvr32 scrobj.dll, XLL + xlAutoOpen + suspicious imports, ISO/IMG/VHD container + LNK + sibling, CHM + script + WScript.Shell.Run, MSI CustomAction + script body, SVG smuggling + base64 + JS click, PDF + /OpenAction + JS, JS/VBS XMLHTTP + ADODB.Stream + Run, ClickFix pastejack |
-| 08 | `08_post_exploitation.yar` | 18 | Impacket scripts + tool-specific args, PtH cmdline shape, Potato family by name+args, generic Potato (SeImpersonate+COM+Impersonate), PrintNightmare, SpoolFool, RBCD abuse, NTLM relay tooling, PowerView 3-of-N functions, GPP cpassword, SeBackup/NTDS extract, DCSync, PSExec family + UNC, NetExec/CME, WMI lateral, DCOM lateral, PetitPotam/Coercer, ADCS Certify/Certipy |
-| 09 | `09_cloud_identity_attacks.yar` | 10 | OAuth DeviceCode phish tool, TokenTactics module, TokenSmith/ROADtools artifact, WAM TokenBroker cache theft, OneAuth identity cache theft, C4Bomb Chrome AppBound decrypt, PRT extraction cmd, AiTM phish landing (Tycoon/Mamba/Sneaky/Whisper), refresh-token staged on disk, device-code phish lure HTML |
+| File | Rules | Coverage |
+|---|---:|---|
+| `00_global_filters.yar` | 2 globals | own artifacts; ESE/SQLite/EVTX/PST/prefetch/registry-hive skip with SAM/SYSTEM/SECURITY exception |
+| `01_initial_access.yar` | 10 | LNK with script-host payload, HTA dropper, XMLHTTP+ADODB script dropper, ClickFix lure, base64-embedded executable, HTML smuggling download, SVG script smuggling, OLE macro auto-exec, RTF Equation Editor, OneNote embedded file |
+| `02_powershell_and_lolbas.yar` | 10 | download cradle to IEX, encoded-command payload, TCPClient reverse shell (+PowerCat/Nishang), AMSI bypass, Defender tamper, logging/ETW tamper, reflective load / shellcode scaffold / msfvenom prologue, obfuscation stacks, stealth flags + remote payload, LOLBAS download-execute one-liners |
+| `03_credential_access.yar` | 8 | LSASS minidump on disk, SAM/SYSTEM/SECURITY hive copy, Kerberos ticket file, dumped-credentials text (mimikatz/pwdump/stealer logs/kerberoast hashes), mimikatz binary/script/commands, LSASS dump commands, browser credential theft tools and scripts, hive theft commands |
+| `04_known_offensive_tools.yar` | 8 | Cobalt Strike beacon, Sliver, Meterpreter, offensive PowerShell frameworks, AD toolkit (Rubeus/SharpHound/Seatbelt/Certify/Impacket/NetExec/PtH), Entra toolkit (AADInternals/ROADtools/TokenTactics/GraphRunner/TeamFiltration/PRT & token-cache theft/device-code flow), Potato LPE family, BYOVD vulnerable drivers |
+| `05_persistence.yar` | 3 | suspicious scheduled-task XML / schtasks / Register-ScheduledTask, WMI event subscription (script + OBJECTS.DATA instance records), script writing autorun keys / services / Startup folder |
+| `06_remote_access_exfil.yar` | 6 | NetSupport RAT config and binaries, commodity RAT strings (Remcos/AsyncRAT/XWorm/DcRat/Quasar/NanoCore/VenomRAT/njRAT), unsanctioned RMM artifacts (AnyDesk/RustDesk/MeshAgent/ScreenConnect/Atera/Splashtop/…), tunnelling tools (ngrok/cloudflared/chisel/frp/ligolo/…), rclone, hard-coded Discord/Telegram exfil |
+| `07_unwanted_tools.yar` | 4 | Defender-killer utilities, KMS/HWID activators, NirSoft password tools, PsExec/ProcDump/IP scanners/kernel process killers on user endpoints |
 
 ---
 
-## 5. Style guide (for new rules)
+## 5. Known benign matches and tuning
 
-Match this template:
+| Rule | Benign case | What to do |
+|---|---|---|
+| `PS_HIGH_Download_Cradle_IEX` | Chocolatey / Scoop / `irm aka.ms/install-powershell.ps1 \| iex` one-liners | Developer actions; on a regular user's device still worth a question |
+| `CRED_HIGH_Registry_Hive_Copy_*` | `C:\Windows.old\…\config\*` for ~10 days after a feature update; RegBack if periodic backup is enabled; Windows Sandbox / container base layers under `C:\ProgramData\Microsoft\Windows\Containers\Layers\*\Specialization\` (readable `SYSTEM` and `SYSTEM.LOG1`) | Filter those paths in KQL; a hive copy anywhere else is theft |
+| `TOOL_MEDHIGH_Vulnerable_Driver_BYOVD` | RTCore64 (MSI Afterburner), WinRing0 (hardware monitors), PROCEXP152 (Process Explorer), mhyprot2 (Genshin Impact) under Program Files | Verify the installing product once, then filter by path |
+| `RMM_MED_Unsanctioned_Remote_Access_Tool` | Your own RMM | Delete that branch from the rule |
+| `RAT_HIGH_NetSupport_Manager_RAT` | A licensed NetSupport Manager deployment | Scope to paths outside Program Files |
+| `CRED_HIGH_Mimikatz`, `PS_HIGH_AMSI_Bypass`, `IA_HIGH_ClickFix_Lure` | A security article cached by the browser (`…\Edge\User Data\Default\Cache\Cache_Data\f_*`) | The path tells you; a cached article is not an artifact in Downloads |
+| `PUA_MED_Admin_Recon_Lateral_Tool`, `TOOL_HIGH_AD_Attack_Toolkit` | IT staff / security team machines | Exclude those device groups in the Sentinel analytics rule |
+| `PERSIST_HIGH_ScheduledTask_Suspicious` | A vendor task that runs a `.vbs/.bat` from ProgramData | Verify the publisher once, filter by task name |
+| `PS_HIGH_Download_Cradle_IEX` | Developer-tool installers (`irm <vendor>/install.ps1 \| iex`) | The exact URLs of Claude Code, Chocolatey, Scoop, PowerShell, uv, bun, pnpm, nvm, rustup and poetry are allow-listed in the rule; the WebClient form of the Chocolatey line still fires and is the documented `expectedfp_` case |
+| `TUNNEL_MEDHIGH_Tunneling_Proxy_Tool` | npm packages and docs that quote `cloudflared`/`ngrok` commands | Command branches require a real token or localhost target; placeholders in docs no longer match |
+| Security staff devices | OneNote notebooks, PowerShell history and notes full of tool names and commands | True positives on legitimately owned content; exclude the security team's device group in the analytics rule |
+| Everything | The maintainer's clone of this repo (`rules\*.yar` quote the indicator strings) | Exclude the repo path on the maintainer's machine |
+
+Classes that were false positives during v3 validation and are now fixed in the rules themselves:
+
+- browser ad-block / public-suffix lists (hostnames and tool names appear in them);
+- Windows feature-pack resources naming activators, and Windows' own `ci.dll`, `ThreatAssessment.dll`, `CapabilityAccessManager.dll`, which list tamper tools and remote-access products by name (every tool-name rule now needs a second vendor artifact);
+- Intel Wi-Fi drivers (contain "Quasar"), Realtek audio DLLs ("SoundControl" contains "dControl"), AMD Vitis AI ("GraphRunner" class), `EhStorTcgDrv.sys` (name contains "gdrv.sys") — the BYOVD rule now reads `OriginalFilename` through the `pe` module with exact matching;
+- PowerShell's own help files and the DSC module (`Invoke-Command -ComputerName` examples, `[Array]::Reverse`, ascending `{0}{1}{2}` format strings);
+- Microsoft's code-integrity block policies (`C:\Windows\schemas\CodeIntegrity\ExamplePolicies\*.xml` list blocked tool file names: the LSASS-dump rule now skips `<SiPolicy` documents and needs an invocation argument after a tool name), System Guard assertions and Sysmon configs that name the mimikatz driver (PE-only now), and `sysmon.exe` itself, whose EULA text names PsExec (PsExec/PAExec/ProcDump are now identified by their own version resource);
+- `SOFTWARE`/`NTUSER` hives whose value data contains `ControlSet001` (hive fingerprints are now anchored on `nk` key cells);
+- Office add-in bundles and web apps with copy-to-clipboard buttons next to command samples;
+- OEM Start Menu shortcuts that open support pages through `rundll32` / `cmd /c start`;
+- installer one-liners of common developer tools (allow-listed by exact URL);
+- a Dutch news site whose name matched an LSASS-dump tool.
+
+The DCR transform currently drops clean scans (`SelfMarker` is always present, so only `TotalMatches > 0` passes). Keep that in mind when you look for "which devices scanned".
+
+---
+
+## 6. Build and validate
+
+```powershell
+cd C:\Git_Project\WinToolKit\Intune\Apps\Yara
+.\tests\Test-Rules.ps1          # combine -> compile -> decoys -> scan -> assert
+```
+
+The runner extracts `yara64.exe` / `yarac64.exe` from the release zip when they are missing, writes `rules\_master.yar` and `compiled_rules.yarc`, generates `tests\decoys\` with `tests\make_decoys.py` (Python 3; a PowerShell generator carrying the same strings is blocked by AMSI), scans it and reports:
+
+- `ok fired` — a decoy fired the expected category rule
+- `ok clean` — a `benign_*` control (our own scripts and task XML, a benign LNK, an NTUSER-shaped hive full of attack text, a vendor task, an HTML page with inline SVG) fired nothing
+- `info expected FP` — the documented Chocolatey one-liner
+- `FAIL` — anything else; fix before deploying
+
+Defender flags the decoy generation (the fake `.kirbi` triggers a behaviour detection on `python.exe`). Run the tests from a folder excluded from Defender real-time protection. Decoys and build artifacts are git-ignored.
+
+Manual equivalent:
+
+```powershell
+.\combine_rules.ps1                                     # rules\_master.yar
+.\yarac64.exe .\rules\_master.yar .\compiled_rules.yarc # expect 0 errors; "may slow down scanning" warnings are fine
+.\yara64.exe -w -r -C .\compiled_rules.yarc <folder>    # ad-hoc scan
+```
+
+Before shipping, also scan a real profile: `yara64.exe -w -r -p 8 -z 300000000 -C compiled_rules.yarc C:\Users\<you>` and read every hit. `-z` skips files above 300 MB; consider adding it to the scan scripts.
+
+---
+
+## 7. Triage playbook
+
+1. **Path first.** Downloads, Desktop, Temp, AppData\Roaming, Public, ProgramData, Windows\Temp, Startup → treat as delivered. Browser cache (`Cache_Data\f_*`), `Windows.old`, Program Files → read the matched strings before escalating.
+2. **Read `MatchStrings`.** The record shows the literal bytes at each match; it tells you which branch fired and usually what the payload is (URL, encoded command, remote).
+3. **Hash and pivot.** `Get-FileHash`, then MDE `DeviceFileEvents` for the creation event and its `InitiatingProcess*` chain, `DeviceProcessEvents` for the command line, `DeviceNetworkEvents` for the URL host.
+4. **Category-specific:**
+   - `IA_*` / `PS_*` / `LOL_*`: find the user action (mail attachment, browser download, ClickFix paste → `DeviceProcessEvents` where `InitiatingProcessFileName == "explorer.exe"` and `ProcessCommandLine` contains the string).
+   - `CRED_HIGH_LSASS_Minidump_On_Disk`, `CRED_HIGH_Registry_Hive_Copy_*`, `CRED_HIGH_Kerberos_Ticket_File`: assume credential theft happened; reset the user's credentials and revoke sessions, then investigate.
+   - `TOOL_*`, `RAT_*`, `TUNNEL_*`, `EXFIL_*`: hands-on-keyboard. Isolate via MDE, then collect.
+   - `RMM_MED_*`: ask the user who installed it. "IT support called me" means a scam session; treat as compromise.
+   - `PERSIST_*`: enumerate the task / subscription / key on the host and remove it after the initial access is understood.
+   - `PUA_*`: policy violation unless it co-occurs with anything above.
+5. **Decoy check.** If the hit is on the maintainer's machine inside this repo or `tests\decoys`, it is the test corpus.
+
+---
+
+## 8. Style guide for new rules
 
 ```yara
 /* -----------------------------------------------------------------------------
-   <CATEGORY>_<SEVERITY>_<ShortName>
-   One-line description of the bound attack shape.
+   CATEGORY_SEVERITY_ShortName
+   One paragraph: what artifact, why it only exists in an attack.
    ----------------------------------------------------------------------------- */
 rule CATEGORY_SEVERITY_ShortName
 {
@@ -130,174 +207,52 @@ rule CATEGORY_SEVERITY_ShortName
         author      = "Nati"
         date        = "YYYY-MM-DD"
         category    = "<category>"
-        severity    = "high"
-        description = "Bound: <verb> + <argument> + <value/target> in one <N>-char window"
-        mitre       = "T1059.001,T1140"
-        reference   = "<URL or CVE>"
+        severity    = "high|medium-high|medium"
+        description = "Plain-language description of every branch"
+        mitre       = "T1059.001"
+        fp_notes    = "Known benign matches and how to tune them"
 
     strings:
-        // Forward bound: verb -> arg -> value
-        $bound_vav = /<verb>[^\r\n]{0,200}<argument>[^\r\n]{0,200}<value>/is ascii wide
-        // Reverse bound: value -> arg -> verb (catches piped variants)
-        $bound_vva = /<value>[^\r\n]{0,200}<argument>[^\r\n]{0,200}<verb>/is ascii wide
+        $format  = { ... }                      // or a structural marker
+        $verb    = /.../i ascii wide
+        $payload = /.../i ascii wide
 
     condition:
-        not uint16(0) == 0x5A4D and
-        not uint32(0) == 0x464C457F and
-        filesize < 5MB and
-        ( $bound_vav or $bound_vva )
+        <format anchor> and filesize < 10MB
+        and $verb and $payload
 }
 ```
 
 Hard rules:
 
-- **No `or $single_keyword` branches.** A standalone tool name, function name, or class name is forbidden as a final OR-arm. Always pair with attacker-context.
-- **Always `ascii wide`** on PS/script content (PowerShell stores strings as UTF-16LE in memory).
-- **Always a `filesize` gate.** Real obfuscated PS is small.
-- **Always the PE/ELF header skip** unless the rule targets binary content (XLL, CobaltStrike, Mimikatz banner-in-exe).
-- **Preserve rule names** when modifying — Sentinel/MDE KQL queries pivot on the rule name.
-- **Don't reference YARA externals** (`filename`, `filepath`, `extension`, `owner` *as YARA operators*) — `combine_rules.ps1` strips files that use them. Word-substrings like `FileName` in PowerShell cmdlet contexts are fine; the combiner now uses an operator-following-token regex to distinguish.
-- Forward slashes inside regex char classes (`[A-Za-z0-9+\/=]`) must be escaped as `\/`.
-- YARA does **not** support `(?:...)`, `(?!...)`, `(?=...)`, `(?<=...)`, `(?<!...)`, or `(?i)` inline modifiers. Use `(...)` non-capturing groups and `/i` flag.
-- All declared `$strings` **must** be referenced in the condition — YARA treats unreferenced strings as syntax errors, not warnings.
-- Non-ASCII characters in regex patterns will fail to compile. Use ASCII alternatives (`I'?m` not `I'’?m`).
-- YARA's regex engine caps repetition counts. Repeat intervals larger than ~10000 will fail with "repeat interval too large" — split into separate strings and AND in the condition.
+- **Three anchors** (format, primitive, payload). No rule fires on a single keyword.
+- **Text rules skip PE/ELF**; binary rules require MZ.
+- **`ascii wide`** on everything PowerShell/script related (UTF-16 in LNK, task XML, memory).
+- **`filesize` gate** on every rule.
+- **Keep rule names stable.** Sentinel KQL pivots on them; add a new rule instead of renaming.
+- **No YARA externals** (`filename`, `filepath`, `extension`, `owner` as operators); `combine_rules.ps1` drops such files.
+- **Add a decoy** to `tests\make_decoys.py` for every new rule, and a `benign_*` control for every FP you fix.
+- **Prefer wide base64 over decoding** for anything that can arrive `-EncodedCommand`.
 
----
-
-## 6. Deployment
-
-### 6.1 Layout
-
-```
-C:\Program Files\YARA\
-├── yara64.exe                  (binary, signed)
-├── yarac64.exe                 (compiler)
-├── compiled_rules.yarc         (master compiled blob - deployed via Intune)
-├── scan-quick.ps1              (Users / ProgramData / Temp / Windows\Temp)
-├── scan-full.ps1               (entire C:\ + other fixed drives)
-└── logs\
-    └── yara_scan_{quick|full}_<HOST>_<DD.MM.YYYY_HH.mm>.json
-```
-
-### 6.2 Build the compiled blob
-
-```powershell
-cd C:\Git_Project\yara_intune
-.\combine_rules.ps1                          # writes rules\_master.yar (10 includes)
-& "<yarac64.exe>" rules\_master.yar compiled_rules.yarc
-Copy-Item compiled_rules.yarc "C:\Program Files\YARA\" -Force
-Copy-Item scan-quick.ps1      "C:\Program Files\YARA\" -Force
-Copy-Item scan-full.ps1       "C:\Program Files\YARA\" -Force
-```
-
-The compiler is in the YARA release zip; the combiner script skips its own master file (`_master.yar`) and any rule file that references YARA externals (`filename matches /.../`, `extension == "..."`, etc.) by content.
-
-### 6.3 Scanning
-
-`scan-quick.ps1` / `scan-full.ps1` invoke:
-
-```
-yara64.exe -r -p 2 -s -C compiled_rules.yarc <target>
-```
-
-| Flag | Purpose |
-|---|---|
-| `-C` | load compiled rules (~30% faster than parsing source on every scan) |
-| `-r` | recursive |
-| `-p 2` | 2 worker threads (raise to 4 on i7+/16 GB endpoints) |
-| `-s` | print matching strings (essential for triage) |
-
-Output is one JSON record per match, with `SelfMarker` embedded so the global filter recognises any cached/forwarded copy of the output as scanner-own.
-
-### 6.4 Intune deployment
-
-Package as a Win32 app:
-- **Install:** `powershell.exe -ExecutionPolicy Bypass -File install.ps1`
-- **Uninstall:** `powershell.exe -ExecutionPolicy Bypass -File uninstall.ps1`
-- **Detection rule:** file exists `C:\Program Files\YARA\compiled_rules.yarc` AND `HKLM\SOFTWARE\YARA\Version` matches.
-
-For rule updates, ship just the new `compiled_rules.yarc` as a separate Win32 app keyed to a version registry value — no need to rebuild the whole package.
-
-### 6.5 Log shipping
-
-Pipe `C:\Program Files\YARA\logs\` to Sentinel via:
-- **Option A (preferred):** MDE recommended file collection — captures match lines into custom table.
-- **Option B:** AMA with a custom DCR collecting the log directory.
-
-A match record looks like:
-
-```json
-{"TimeGenerated":"2026-05-24T...","Computer":"DESKTOP-...","Rule":"RS_HIGH_PS_TCPClient_Stream_IEX_Loop","MatchedFile":"C:\\...\\evil.ps1","MatchStrings":"0x0:$bound_full: ...","MatchCount":1,"SelfMarker":"__YARA_INTUNE_SELF_OUTPUT_v1__"}
-```
-
-Drop any record where `MatchedFile` contains the scanner-own paths *or* where any indexed cache contains the SelfMarker — those are echoes of prior scans.
-
----
-
-## 7. Triage playbook
-
-1. Parse the match record. The `MatchStrings` field shows the literal bytes at each match offset — confirms which bound branch fired.
-2. Hash the file (`Get-FileHash`). Pivot in MDE / Defender / VT.
-3. Pull parent process chain for the file's creation event (`DeviceFileEvents` → `InitiatingProcess*`).
-4. Pivot in MDE on the rule name. The bound shape gives you the exact KQL pivot:
-   - `RS_HIGH_PS_TCPClient_Stream_IEX_Loop` → `DeviceProcessEvents | where ProcessCommandLine matches regex @"Net\.Sockets\.TCPClient\s*\(\s*['""](\d{1,3}\.){3}\d{1,3}['""]?\s*,\s*\d{1,5}"`
-   - `CRED_HIGH_Comsvcs_MiniDump_LSASS` → `DeviceProcessEvents | where ProcessCommandLine has_all ("comsvcs.dll","MiniDump") and ProcessCommandLine matches regex @"\d{2,6}\s+['""].*\.dmp"`
-   - `OBF_HIGH_TrustedSite_Download_Cradle` → `DeviceNetworkEvents | where InitiatingProcessFileName in~ ("powershell.exe","pwsh.exe") and RemoteUrl matches regex @"raw\.githubusercontent\.com|gist\.githubusercontent\.com|cdn\.discordapp\.com\/attachments|..."`
-5. If user is non-admin and the matched file is in `AppData\Local\Temp`, `Downloads`, or `ProgramData` → isolate via MDE live response (`Isolate-Machine`) pending review.
-6. If user is admin (sysadmin running pentest tooling on purpose), confirm out-of-band before isolation.
-
----
-
-## 8. Validation
-
-Before deploying:
-
-```powershell
-cd C:\Git_Project\yara_intune
-.\combine_rules.ps1
-& "<yarac64.exe>" rules\_master.yar compiled_rules.yarc.test 2>&1
-# Expect: 0 errors, possibly a few "may slow down scanning" warnings (acceptable).
-# If error: read the file/line, fix, re-run.
-Remove-Item compiled_rules.yarc.test
-```
-
-Then functional test against the canonical decoys:
-
-```powershell
-# 1) Reverse-shell decoy must fire RS_HIGH_PS_TCPClient_Stream_IEX_Loop exactly
-& "<yara64.exe>" -w -C compiled_rules.yarc <path-to-reverse-decoy>.txt
-
-# 2) Clean text file with the literal substring "iex" but no attack shape must fire NOTHING
-"this script demonstrates iex usage" | Set-Content .\noisetest.txt
-& "<yara64.exe>" -w -C compiled_rules.yarc .\noisetest.txt   # expect no output
-Remove-Item .\noisetest.txt
-```
-
-If (1) fires more than one rule, or (2) fires anything → a bound pattern regressed; investigate before deploying.
-
----
-
-## 9. Known YARA syntax gotchas
+YARA syntax reminders:
 
 | Gotcha | Wrong | Right |
 |---|---|---|
-| Forward slash inside char class | `[A-Za-z0-9+/=]` | `[A-Za-z0-9+\/=]` |
-| Non-capturing group | `(?:foo\|bar)` | `(foo\|bar)` |
-| Negative lookahead | `(?!Program Files)` | rewrite as positive user-writable match |
-| Inline case-insensitive | `(?i)foo` | `/foo/i` flag or `"foo" nocase` |
-| Unreferenced string | `$x = "..."` declared but not in condition | reference every declared `$x` |
-| Windows path backslash | `\Run` | `\\Run` (in regex) or `"\\Run"` (in plain string) |
-| Wide PowerShell strings | `"AmsiUtils" ascii` | `"AmsiUtils" ascii wide` (PS uses UTF-16LE in memory) |
-| Non-ASCII chars in regex | `I['’]?m` | `I'?m` (or hex bytes) |
-| Huge repeat intervals | `[\s\S]{0,200000}<x>` | split into separate strings + AND |
-| `or $tool_name_alone` | `or $rubeus` | `( $rubeus and $rubeus_verb )` |
+| Forward slash inside a regex char class | `[A-Za-z0-9+/=]` | `[A-Za-z0-9+\/=]` |
+| Non-capturing group / lookaround / inline flags | `(?:x)`, `(?!x)`, `(?i)` | `(x)`, rewrite positively, `/i` |
+| Unreferenced string | declared `$x` not in condition | reference every `$x` (compile error otherwise) |
+| Backslash in a text string | `"System32\Config"` | `"System32\\Config"` |
+| `^` / `$` in regex | expecting per-line anchors | they anchor to the file; use `[\r\n]\s*` instead |
+| Repeat counts | `{0,200000}` | keep intervals under ~10000 or split the pattern |
+| Non-ASCII in regex | `I['’]?m` | `I'?m` |
+| `nocase` with base64 | `"x" nocase base64` | not allowed; declare each case variant |
 
 ---
 
-## 10. Backlog
+## 9. Backlog
 
-- [ ] Build a Sentinel **Analytics Rule per category file** that fires on YARA log ingestion + does the KQL pivot in one step.
-- [ ] DLL side-loading pair detection (proxy DLL next to signed EXE) — needs sibling-file logic; pair with a PS pre-filter script.
-- [ ] Quarterly red-team decoy refresh: add new canonical PoCs as `tests/decoys/*.txt` and run the validator section §8 as CI.
-- [ ] Investigate moving SelfMarker into a hidden Alternate Data Stream so the scan JSON looks marker-free to a human reader but the global filter still recognises it.
+- [ ] Sentinel analytics rule per category file (`IA_*`, `CRED_*`, `TOOL_*` …) with the severity mapping from §3.
+- [ ] Add `-z 300000000` (skip files > 300 MB) to `scan-quick.ps1` / `scan-full.ps1`.
+- [ ] Decide whether the DCR transform should keep zero-match records (device heartbeat) or stay cost-optimised.
+- [ ] Quarterly: refresh BYOVD driver list from loldrivers.io, RAT string sets from Sekoia/ditekSHen, RMM vendor list from the sanctioned-software inventory.
+- [ ] Real-sample validation: run the compiled set against MalwareBazaar samples for Remcos/AsyncRAT/XWorm/NetSupport in an isolated VM.

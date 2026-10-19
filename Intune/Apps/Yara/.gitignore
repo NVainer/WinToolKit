@@ -1,0 +1,12 @@
+# build artifacts
+rules/_master.yar
+compiled_rules.yarc
+*.intunewin
+yara64.exe
+yarac64.exe
+
+# generated test corpus (contains attack-shaped strings on purpose)
+tests/decoys/
+
+# local info
+rules/README.md
