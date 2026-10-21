@@ -6,7 +6,6 @@ $Yara = "C:\Program Files\YARA\yara64.exe"
 $Rules = "C:\Program Files\YARA\compiled_rules.yarc"
 $Out = "C:\Program Files\YARA\logs"; New-Item $Out -ItemType Directory -Force | Out-Null
 
-# Base targets + all other fixed drives (D:\, E:\, …)
 $BaseTargets = @("C:\Users","C:\ProgramData","C:\Temp","C:\Windows\Temp")
 $OtherDrives = Get-PSDrive -PSProvider FileSystem |
     Where-Object { $_.Root -ne 'C:\' -and $_.DisplayRoot -eq $null -and $_.Free -ne $null } |
@@ -18,7 +17,7 @@ $hits = @()
 foreach ($t in $Targets) {
     if (Test-Path $t) {
         # -r recursive, -p threads, -s show strings, -C compiled rules (.yarc)
-        $r = & $Yara -r -p 2 -s -C $Rules $t 2>$null
+        $r = & $Yara -r -p 10 -s -C $Rules $t 2>$null
 
         $currentHit = $null
 
@@ -41,43 +40,56 @@ foreach ($t in $Targets) {
     }
 }
 
+$hashCache = @{}
+function Get-HitHash {
+    param([string]$Path)
+    if ($hashCache.ContainsKey($Path)) { return $hashCache[$Path] }
+    $r = [pscustomobject]@{ SHA256=$null; SHA1=$null; CreatedUtc=$null }
+    try {
+        $fi = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        $r.CreatedUtc = $fi.CreationTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        foreach ($alg in 'SHA256','SHA1') {
+            $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+                                  [IO.FileShare]'ReadWrite, Delete')
+            try     { $r.$alg = (Get-FileHash -InputStream $fs -Algorithm $alg).Hash }
+            finally { $fs.Dispose() }
+        }
+    } catch { }
+    $hashCache[$Path] = $r
+    $r
+}
+
 $hostName  = $env:COMPUTERNAME
 $timestamp = Get-Date -Format "dd.MM.yyyy_HH.mm"
 $fn        = Join-Path $Out ("yara_scan_quick_{0}_{1}.json" -f $hostName, $timestamp)
 $nowIso    = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 $scanId    = [Guid]::NewGuid().ToString()
 
-# Self-marker: lets the SKIP_OWN_SCAN_ARTIFACTS global rule recognise this
-# file (or any copy of it - Outlook attachment, Windows Search index, etc.)
-# as scanner-generated output and suppress all matches on it.
 $SelfMarker = '__YARA_INTUNE_SELF_OUTPUT_v1__'
 
-# ---- Envelope-per-scan output schema (v2) -----------------------------------
-# One JSON line per SCAN (not per match). All matches nested under .Matches[].
-# Sentinel KQL can unpack with: | mv-expand Match = Matches
-# Empty-scan record still carries SelfMarker + ScanId so DCR sees every run.
-# ---------------------------------------------------------------------------
-$matches = @()
-foreach ($h in $hits) {
-    $matches += [pscustomobject]@{
+
+$matchList = foreach ($h in $hits) {
+    $fh = Get-HitHash $h.File
+    [pscustomobject]@{
         Rule         = $h.Rule
         MatchedFile  = $h.File
+        SHA256       = $fh.SHA256
+        SHA1         = $fh.SHA1
+        CreatedUtc   = $fh.CreatedUtc
         MatchStrings = ($h.Match_Found -join '; ')
         MatchCount   = $h.Match_Found.Count
     }
 }
-
 $envelope = [pscustomobject]@{
     TimeGenerated = $nowIso
     Computer      = $hostName
     ScanType      = 'quick'
     ScanId        = $scanId
     SelfMarker    = $SelfMarker
-    TotalMatches  = $matches.Count
-    Matches       = @($matches)   # force array even when count == 0 or 1
+    TotalMatches  = @($matchList).Count
+    Matches       = @($matchList)   # force array even when count == 0 or 1
 }
 
-# Depth=6 so nested objects (and any future extension) serialise correctly.
 $json = $envelope | ConvertTo-Json -Compress -Depth 6
 [System.IO.File]::WriteAllLines($fn, @($json), [System.Text.UTF8Encoding]::new($false))
-Write-Host "Saved results to $fn  (ScanId=$scanId, $($matches.Count) matches)"
+Write-Host "Saved results to $fn  (ScanId=$scanId, $(@($matchList).Count) matches)"
