@@ -17,7 +17,10 @@ $hits = @()
 foreach ($t in $Targets) {
     if (Test-Path $t) {
         # -r recursive, -p threads, -s show strings, -C compiled rules (.yarc)
-        $r = & $Yara -r -p 2 -s -C $Rules $t 2>$null
+        # -N do not follow junctions/symlinks: C:\Users\All Users -> C:\ProgramData and the
+        #    legacy "Application Data" junctions inside each profile are traversable by SYSTEM,
+        #    so without -N everything under ProgramData/AppData is scanned and reported twice.
+        $r = & $Yara -r -N -p 2 -s -C $Rules $t 2>$null
 
         $currentHit = $null
 

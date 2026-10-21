@@ -267,9 +267,16 @@ rule PS_MEDHIGH_Reflective_Load_InMemory
         $msf_x64        = { FC 48 83 E4 F0 E8 ?? ?? ?? ?? 41 51 41 50 52 51 56 48 31 D2 65 48 8B 52 60 }
         $msf_x86        = { FC E8 8? 00 00 00 60 89 E5 31 C0 64 8B 50 30 8B 52 0C 8B 52 14 }
 
+        // Microsoft Defender for Endpoint's own data-collection script
+        // (ProgramData\Microsoft\Windows Defender Advanced Threat Protection\DataCollection\*.ps1)
+        // loads its helper assembly from a base64 blob with exactly this shape.
+        // Seen fleet-wide on 2026-10-20; the variable name is unique to that script.
+        $mde_ddc_helper = "ddcHelperAssemblyBytesBase64" ascii wide
+
     condition:
         filesize < 10MB
         and not uint16(0) == 0x5A4D and not uint32(0) == 0x464C457F
+        and not $mde_ddc_helper
         and (
             $asm_load_b64 or $asm_load_var or $gzip_load or $addtype_inject
             or ( $byte_array and $copy_exec )

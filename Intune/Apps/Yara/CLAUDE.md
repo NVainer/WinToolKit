@@ -77,7 +77,7 @@ Everything is hardcoded to `C:\Program Files\YARA\`; the scan scripts, task XMLs
 
 - `install.ps1` copies the package there, registers `YARA-Quick` and `YARA-Full` from the XMLs (SYSTEM, highest privileges, hidden, 2 h execution limit, not on battery), and adds a Defender process exclusion for `yara64.exe`.
 - `YARA-Quick` runs daily 14:00 → `scan-quick.ps1` (`C:\Users`, `C:\ProgramData`, `C:\Temp`, `C:\Windows\Temp` + every other fixed drive). `YARA-Full` runs on the 26th of each month → `scan-full.ps1` (all of `C:\` + other fixed drives).
-- Both scripts call `yara64.exe -r -p 2 -s -C compiled_rules.yarc <target>` and parse stdout: a line `RULE  PATH` opens a hit, following `0x…` lines are its matched strings.
+- Both scripts call `yara64.exe -r -N -p 2 -s -C compiled_rules.yarc <target>` and parse stdout: a line `RULE  PATH` opens a hit, following `0x…` lines are its matched strings. `-N` (no symlinks/junctions) is required: `C:\Users\All Users` is a junction to `C:\ProgramData` and the legacy `Application Data` junctions inside profiles are traversable by SYSTEM, so without it everything under ProgramData and AppData is scanned and reported twice (observed in production on 2026-10-20).
 - The two scan scripts are identical except for `$BaseTargets` and the `ScanType` string. **Any change to one must be mirrored in the other.**
 - The XMLs declare `encoding="UTF-16"`; `install.ps1` feeds them to `Register-ScheduledTask -Xml` via `Get-Content | Out-String`, so keep them readable by `Get-Content` with default encoding.
 - `System32\Tasks\*` and `wbem\Repository\OBJECTS.DATA` (targets of the persistence rules) are only reached by the full scan, which runs as SYSTEM.

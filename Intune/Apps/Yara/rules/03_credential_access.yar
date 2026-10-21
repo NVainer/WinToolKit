@@ -105,7 +105,10 @@ rule CRED_HIGH_Kerberos_Ticket_File
         $ldap     = "ldap"     ascii
         $http     = "HTTP"     ascii
         $mssql    = "MSSQLSvc" ascii
-        $b64kirbi = /\bdoI[EFGH][A-Za-z0-9+\/]{500,}/ ascii wide
+        // The base64 form must START a token (line start, whitespace, quote, '=', ':', ',').
+        // "doIE" also occurs mid-stream inside large base64 image blobs (SVG/CSS data URIs);
+        // a 4-character sequence in a 2 MB blob is a coin flip, a token boundary is not.
+        $b64kirbi = /(^|[\s"'=:,>\(\[])doI[EFGH][A-Za-z0-9+\/]{500,}/ ascii wide
 
     condition:
         ( uint16(0) == 0x8276 and filesize < 64KB and 1 of ($krbtgt, $cifs, $host, $ldap, $http, $mssql) )

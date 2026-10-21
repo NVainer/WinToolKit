@@ -126,6 +126,12 @@ WB('cred_system.hiv', b'regf' + Z(44) + u16('stemRoot\\System32\\Config\\SYSTEM'
 WB('benign_ntuser.dat', b'regf' + Z(44) + u16('??\\C:\\Users\\x\\ntuser.dat') + Z(9000) +
    b'Software Control Panel powershell -w hidden -enc AAAA iex sekurlsa::logonpasswords privilege::debug')
 WB('cred_ticket.kirbi', bytes([0x76, 0x82, 0x05, 0x10, 0x30, 0x82]) + Z(40) + b'krbtgt' + Z(1200))
+# base64 form as tooling prints it: the blob starts a token (line start)
+W('cred_kirbi_b64.txt', 'Base64EncodedTicket:\r\n\r\ndoIFvj' + 'A' * 700 + '\r\n')
+# the same 4 characters INSIDE a big base64 image blob must not fire (SVG data URIs, 2026-10-20 fleet FP)
+W('benign_svg_base64_blob.svg', '<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,iVBORw0KGgo' + 'Q' * 900 + 'doIEtkPXe41ogdPy6bf' + 'Q' * 900 + '"/></svg>')
+# Microsoft Defender for Endpoint data-collection script shape (fleet-wide FP on 2026-10-20)
+W('benign_mde_datacollection.ps1', '$bytes = [Convert]::FromBase64String($ddcHelperAssemblyBytesBase64)\r\nfor (($i = 0); $i -lt 3000; $i++) { $bytes[$i] = $bytes[$i] -bxor 0x4 }\r\n$assembly = [System.Reflection.Assembly]::Load($bytes)\r\n')
 W('cred_mimi_out.txt', 'Authentication Id : 0 ; 996 (00000000:000003e4)\r\nSession : Interactive from 1\r\n* Username : admin\r\n* Domain : CORP\r\n* NTLM : 8846f7eaee8fb117ad06bdd830b7586c\r\nmsv :\r\n [00000003] Primary')
 W('cred_hashes.txt', 'Administrator:500:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::\r\nGuest:501:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::\r\nuser:1001:aad3b435b51404eeaad3b435b51404ee:8846f7eaee8fb117ad06bdd830b7586c:::')
 W('cred_mimikatz.txt', 'privilege::debug\r\nsekurlsa::logonpasswords')

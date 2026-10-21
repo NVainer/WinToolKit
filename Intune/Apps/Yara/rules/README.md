@@ -130,7 +130,7 @@ A tool name in a blog post must not fire. Tool rules bind the name to a tool-spe
 | `PERSIST_HIGH_ScheduledTask_Suspicious` | A vendor task that runs a `.vbs/.bat` from ProgramData | Verify the publisher once, filter by task name |
 | `PS_HIGH_Download_Cradle_IEX` | Developer-tool installers (`irm <vendor>/install.ps1 \| iex`) | The exact URLs of Claude Code, Chocolatey, Scoop, PowerShell, uv, bun, pnpm, nvm, rustup and poetry are allow-listed in the rule; the WebClient form of the Chocolatey line still fires and is the documented `expectedfp_` case |
 | `TUNNEL_MEDHIGH_Tunneling_Proxy_Tool` | npm packages and docs that quote `cloudflared`/`ngrok` commands | Command branches require a real token or localhost target; placeholders in docs no longer match |
-| Security staff devices | OneNote notebooks, PowerShell history and notes full of tool names and commands | True positives on legitimately owned content; exclude the security team's device group in the analytics rule |
+| Security staff devices | OneNote notebooks, PowerShell history, notes full of tool names, and Advanced Hunting / Sentinel CSV exports received by mail (`Olk\Attachments\...\query_data*.csv` and its EBWebView cache copies) | True positives on legitimately owned content; exclude the security team's device group in the analytics rule, or filter `MatchedFile` on `query_data` |
 | Everything | The maintainer's clone of this repo (`rules\*.yar` quote the indicator strings) | Exclude the repo path on the maintainer's machine |
 
 Classes that were false positives during v3 validation and are now fixed in the rules themselves:
@@ -141,6 +141,7 @@ Classes that were false positives during v3 validation and are now fixed in the 
 - PowerShell's own help files and the DSC module (`Invoke-Command -ComputerName` examples, `[Array]::Reverse`, ascending `{0}{1}{2}` format strings);
 - Microsoft's code-integrity block policies (`C:\Windows\schemas\CodeIntegrity\ExamplePolicies\*.xml` list blocked tool file names: the LSASS-dump rule now skips `<SiPolicy` documents and needs an invocation argument after a tool name), System Guard assertions and Sysmon configs that name the mimikatz driver (PE-only now), and `sysmon.exe` itself, whose EULA text names PsExec (PsExec/PAExec/ProcDump are now identified by their own version resource);
 - `SOFTWARE`/`NTUSER` hives whose value data contains `ControlSet001` (hive fingerprints are now anchored on `nk` key cells);
+- **first production day (2026-10-20):** Microsoft Defender for Endpoint's own data-collection script under `ProgramData\Microsoft\Windows Defender Advanced Threat Protection\DataCollection\` (fired `PS_MEDHIGH_Reflective_Load_InMemory` on every device; now excluded by its unique helper-variable name), and SharePoint/OneDrive SVG assets whose embedded base64 image data happened to contain the kirbi prefix mid-stream (`CRED_HIGH_Kerberos_Ticket_File` now requires the base64 blob to start a token). The same day also showed every ProgramData file reported twice through the `C:\Users\All Users` junction; the scan scripts now pass `-N` to yara.
 - Office add-in bundles and web apps with copy-to-clipboard buttons next to command samples;
 - OEM Start Menu shortcuts that open support pages through `rundll32` / `cmd /c start`;
 - installer one-liners of common developer tools (allow-listed by exact URL);
