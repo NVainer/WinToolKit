@@ -20,7 +20,7 @@ foreach ($t in $Targets) {
         # -N do not follow junctions/symlinks: C:\Users\All Users -> C:\ProgramData and the
         #    legacy "Application Data" junctions inside each profile are traversable by SYSTEM,
         #    so without -N everything under ProgramData/AppData is scanned and reported twice.
-        $r = & $Yara -r -N -p 10 -s -C $Rules $t 2>$null
+        $r = & $Yara -r -N -p 2 -s -C $Rules $t 2>$null
 
         $currentHit = $null
 
