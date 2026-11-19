@@ -68,6 +68,11 @@ $fn        = Join-Path $Out ("yara_scan_quick_{0}_{1}.json" -f $hostName, $times
 $nowIso    = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 $scanId    = [Guid]::NewGuid().ToString()
 
+if (@($hits).Count -eq 0) {
+    Write-Host "No matches (ScanId=$scanId) - no output file written"
+    exit 0
+}
+
 $SelfMarker = '__YARA_INTUNE_SELF_OUTPUT_v1__'
 
 
